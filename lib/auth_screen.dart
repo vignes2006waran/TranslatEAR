@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'earbud_screen.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key});
@@ -36,10 +37,10 @@ class _AuthScreenState extends State<AuthScreen> {
       }
       // Navigate to next screen
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Success!'),
-            backgroundColor: Color(0xFF10A37F),
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => const EarbudScreen(),
           ),
         );
       }
@@ -78,10 +79,10 @@ class _AuthScreenState extends State<AuthScreen> {
       await FirebaseAuth.instance.signInWithCredential(credential);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Google Sign In Successful!'),
-            backgroundColor: Color(0xFF10A37F),
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => const EarbudScreen(),
           ),
         );
       }
