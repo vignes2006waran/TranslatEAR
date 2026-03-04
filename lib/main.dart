@@ -1,18 +1,27 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'firebase_options.dart';
 import 'auth_screen.dart';
+import 'home_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.light,
+      systemNavigationBarColor: Color(0xFF0A0A0F),
+      systemNavigationBarIconBrightness: Brightness.light,
+    ),
   );
-  runApp(const MyApp());
+  runApp(const TranslateARApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class TranslateARApp extends StatelessWidget {
+  const TranslateARApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -20,10 +29,10 @@ class MyApp extends StatelessWidget {
       title: 'TranslateAR',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: const Color(0xFF212121),
+        scaffoldBackgroundColor: const Color(0xFF0A0A0F),
         colorScheme: const ColorScheme.dark(
           primary: Color(0xFF10A37F),
-          background: Color(0xFF212121),
+          surface: Color(0xFF0F0F1A),
         ),
       ),
       home: const SplashScreen(),
@@ -48,27 +57,31 @@ class _SplashScreenState extends State<SplashScreen>
   void initState() {
     super.initState();
     _controller = AnimationController(
-      duration: const Duration(seconds: 2),
+      duration: const Duration(milliseconds: 1200),
       vsync: this,
     );
-
     _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeIn),
+      CurvedAnimation(parent: _controller, curve: Curves.easeOut),
     );
-
-    _scaleAnimation = Tween<double>(begin: 0.5, end: 1.0).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.elasticOut),
+    _scaleAnimation = Tween<double>(begin: 0.85, end: 1.0).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeOut),
     );
-
     _controller.forward();
 
     Future.delayed(const Duration(seconds: 3), () {
-      if (mounted) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => const AuthScreen()),
-        );
-      }
+      if (!mounted) return;
+      // Auto-login: if user already signed in, skip auth screen
+      final user = FirebaseAuth.instance.currentUser;
+      Navigator.pushReplacement(
+        context,
+        PageRouteBuilder(
+          pageBuilder: (_, __, ___) =>
+          user != null ? const HomeScreen() : const AuthScreen(),
+          transitionDuration: const Duration(milliseconds: 600),
+          transitionsBuilder: (_, anim, __, child) =>
+              FadeTransition(opacity: anim, child: child),
+        ),
+      );
     });
   }
 
@@ -81,7 +94,7 @@ class _SplashScreenState extends State<SplashScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF212121),
+      backgroundColor: const Color(0xFF0A0A0F),
       body: Center(
         child: FadeTransition(
           opacity: _fadeAnimation,
@@ -90,49 +103,66 @@ class _SplashScreenState extends State<SplashScreen>
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // Logo Icon
-                Container(
-                  width: 120,
-                  height: 120,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF2A2A2A),
-                    borderRadius: BorderRadius.circular(30),
-                    border: Border.all(
-                      color: const Color(0xFF10A37F),
-                      width: 2,
+                Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Container(
+                      width: 140,
+                      height: 140,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFF10A37F).withOpacity(0.2),
+                            blurRadius: 80,
+                            spreadRadius: 30,
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  child: const Icon(
-                    Icons.translate,
-                    size: 70,
-                    color: Color(0xFF10A37F),
-                  ),
+                    Container(
+                      width: 100,
+                      height: 100,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF10A37F).withOpacity(0.1),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: const Color(0xFF10A37F).withOpacity(0.3),
+                          width: 1.5,
+                        ),
+                      ),
+                      child: const Icon(Icons.translate, size: 48,
+                          color: Color(0xFF10A37F)),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 30),
-                // App Name
+                const SizedBox(height: 28),
                 const Text(
                   'TranslateAR',
                   style: TextStyle(
                     color: Colors.white,
-                    fontSize: 42,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 2,
+                    fontSize: 36,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -1.5,
                   ),
                 ),
-                const SizedBox(height: 10),
-                // Tagline
+                const SizedBox(height: 8),
                 const Text(
-                  'Real-time Translation in your ears',
-                  style: TextStyle(
-                    color: Color(0xFF8E8EA0),
-                    fontSize: 16,
-                  ),
+                  'Real-time AI translation',
+                  style: TextStyle(color: Color(0xFF555570), fontSize: 15),
                 ),
                 const SizedBox(height: 60),
-                // Loading indicator
-                const CircularProgressIndicator(
-                  color: Color(0xFF10A37F),
-                  strokeWidth: 2,
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(3, (i) => Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 4),
+                    width: 6, height: 6,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: const Color(0xFF10A37F).withOpacity(
+                          i == 0 ? 1.0 : i == 1 ? 0.5 : 0.2),
+                    ),
+                  )),
                 ),
               ],
             ),

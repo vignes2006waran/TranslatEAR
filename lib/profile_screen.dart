@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'auth_screen.dart';
+import 'home_screen.dart'; // for TranslationHistory
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -9,13 +11,17 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  final User? user = FirebaseAuth.instance.currentUser;
+  User? get user => FirebaseAuth.instance.currentUser;
 
-  // List of 200 languages
   final List<Map<String, String>> languages = [
     {'name': 'Tamil', 'code': 'tam_Taml'},
-    {'name': 'English', 'code': 'eng_Latn'},
     {'name': 'Hindi', 'code': 'hin_Deva'},
+    {'name': 'Telugu', 'code': 'tel_Telu'},
+    {'name': 'Malayalam', 'code': 'mal_Mlym'},
+    {'name': 'Kannada', 'code': 'kan_Knda'},
+    {'name': 'Bengali', 'code': 'ben_Beng'},
+    {'name': 'Urdu', 'code': 'urd_Arab'},
+    {'name': 'English', 'code': 'eng_Latn'},
     {'name': 'French', 'code': 'fra_Latn'},
     {'name': 'Spanish', 'code': 'spa_Latn'},
     {'name': 'Arabic', 'code': 'arb_Arab'},
@@ -26,323 +32,460 @@ class _ProfileScreenState extends State<ProfileScreen> {
     {'name': 'Italian', 'code': 'ita_Latn'},
     {'name': 'Portuguese', 'code': 'por_Latn'},
     {'name': 'Russian', 'code': 'rus_Cyrl'},
-    {'name': 'Telugu', 'code': 'tel_Telu'},
-    {'name': 'Malayalam', 'code': 'mal_Mlym'},
-    {'name': 'Kannada', 'code': 'kan_Knda'},
-    {'name': 'Bengali', 'code': 'ben_Beng'},
-    {'name': 'Urdu', 'code': 'urd_Arab'},
     {'name': 'Turkish', 'code': 'tur_Latn'},
     {'name': 'Dutch', 'code': 'nld_Latn'},
   ];
 
   String selectedLanguage = 'Tamil';
-  String selectedLanguageCode = 'tam_Taml';
+
+  int get totalTranslations => TranslationHistory.sessions
+      .fold(0, (sum, s) => sum + (s['conversations'] as List).length);
+
+  int get todaySessions {
+    final today = DateTime.now();
+    return TranslationHistory.sessions
+        .where((s) => s['date'] == 'Today')
+        .length;
+  }
+
+  int get languagesUsed {
+    final langs = TranslationHistory.sessions
+        .map((s) => '${s['from']}_${s['to']}')
+        .toSet();
+    return langs.isEmpty ? 0 : langs.length;
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF212121),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF2A2A2A),
-        title: const Text(
-          'Profile',
-          style: TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          children: [
-            const SizedBox(height: 20),
-
-            // Profile Avatar
-            Stack(
-              children: [
-                CircleAvatar(
-                  radius: 60,
-                  backgroundColor: const Color(0xFF10A37F),
-                  backgroundImage: user?.photoURL != null
-                      ? NetworkImage(user!.photoURL!)
-                      : null,
-                  child: user?.photoURL == null
-                      ? Text(
-                    user?.displayName?.substring(0, 1).toUpperCase() ??
-                        'U',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 40,
-                      fontWeight: FontWeight.bold,
+      backgroundColor: const Color(0xFF0A0A0F),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            children: [
+              // Top bar
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                child: Row(
+                  children: [
+                    GestureDetector(
+                      onTap: () => Navigator.pop(context),
+                      child: Container(
+                        width: 36, height: 36,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF0F0F1A),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xFF1E1E2E)),
+                        ),
+                        child: const Icon(Icons.arrow_back_rounded,
+                            color: Color(0xFF8888A8), size: 17),
+                      ),
                     ),
-                  )
-                      : null,
+                    const SizedBox(width: 12),
+                    const Text('Profile',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: -0.5)),
+                  ],
                 ),
-                Positioned(
-                  bottom: 0,
-                  right: 0,
-                  child: Container(
-                    width: 35,
-                    height: 35,
+              ),
+
+              const SizedBox(height: 28),
+
+              // Avatar
+              Stack(
+                alignment: Alignment.bottomRight,
+                children: [
+                  Container(
+                    width: 90, height: 90,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF12B589), Color(0xFF0B7D5C)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF10A37F).withOpacity(0.35),
+                          blurRadius: 24,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                    child: user?.photoURL != null
+                        ? ClipOval(
+                        child: Image.network(user!.photoURL!,
+                            fit: BoxFit.cover))
+                        : Center(
+                      child: Text(
+                        user?.displayName
+                            ?.substring(0, 1)
+                            .toUpperCase() ??
+                            'U',
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 38,
+                            fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ),
+                  Container(
+                    width: 26, height: 26,
                     decoration: BoxDecoration(
                       color: const Color(0xFF10A37F),
                       shape: BoxShape.circle,
                       border: Border.all(
-                        color: const Color(0xFF212121),
-                        width: 2,
-                      ),
+                          color: const Color(0xFF0A0A0F), width: 2),
                     ),
-                    child: const Icon(
-                      Icons.edit,
-                      color: Colors.white,
-                      size: 18,
-                    ),
+                    child: const Icon(Icons.edit_rounded,
+                        color: Colors.white, size: 13),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 14),
+
+              Text(
+                user?.displayName ?? 'User',
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                user?.email ?? '',
+                style: const TextStyle(
+                    color: Color(0xFF444460), fontSize: 13),
+              ),
+
+              const SizedBox(height: 24),
+
+              // Stats
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 18),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F0F1A),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: const Color(0xFF141425)),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _stat(totalTranslations.toString(), 'Total', Icons.translate_rounded),
+                      _vDivider(),
+                      _stat(todaySessions.toString(), 'Today', Icons.today_rounded),
+                      _vDivider(),
+                      _stat(languagesUsed.toString(), 'Languages', Icons.language_rounded),
+                    ],
                   ),
                 ),
-              ],
-            ),
-
-            const SizedBox(height: 16),
-
-            // User Name
-            Text(
-              user?.displayName ?? 'User',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
               ),
-            ),
 
-            const SizedBox(height: 4),
+              const SizedBox(height: 14),
 
-            // Email
-            Text(
-              user?.email ?? '',
-              style: const TextStyle(
-                color: Colors.grey,
-                fontSize: 14,
-              ),
-            ),
-
-            const SizedBox(height: 30),
-
-            // Native Language Selector
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFF2A2A2A),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Row(
+              // Language selector
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F0F1A),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: const Color(0xFF141425)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(
-                        Icons.language,
-                        color: Color(0xFF10A37F),
+                      const Row(
+                        children: [
+                          Icon(Icons.language_rounded,
+                              color: Color(0xFF10A37F), size: 17),
+                          SizedBox(width: 8),
+                          Text('Native Language',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600)),
+                        ],
                       ),
-                      SizedBox(width: 8),
-                      Text(
-                        'Native Language',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Translations will output in this language',
+                        style:
+                        TextStyle(color: Color(0xFF444460), fontSize: 12),
+                      ),
+                      const SizedBox(height: 14),
+                      Container(
+                        padding:
+                        const EdgeInsets.symmetric(horizontal: 14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF141420),
+                          borderRadius: BorderRadius.circular(12),
+                          border:
+                          Border.all(color: const Color(0xFF1E1E2E)),
+                        ),
+                        child: DropdownButton<String>(
+                          value: selectedLanguage,
+                          isExpanded: true,
+                          dropdownColor: const Color(0xFF141420),
+                          underline: const SizedBox(),
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 14),
+                          icon: const Icon(Icons.keyboard_arrow_down_rounded,
+                              color: Color(0xFF555570)),
+                          items: languages
+                              .map((lang) => DropdownMenuItem<String>(
+                            value: lang['name'],
+                            child: Text(lang['name']!),
+                          ))
+                              .toList(),
+                          onChanged: (value) {
+                            setState(() => selectedLanguage = value!);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                    'Native language set to $value'),
+                                backgroundColor:
+                                const Color(0xFF10A37F),
+                                behavior: SnackBarBehavior.floating,
+                                shape: RoundedRectangleBorder(
+                                    borderRadius:
+                                    BorderRadius.circular(12)),
+                              ),
+                            );
+                          },
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'Translations will be done to this language',
-                    style: TextStyle(
-                      color: Colors.grey,
-                      fontSize: 12,
-                    ),
+                ),
+              ),
+
+              const SizedBox(height: 14),
+
+              // Options
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F0F1A),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: const Color(0xFF141425)),
                   ),
-                  const SizedBox(height: 16),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF212121),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: DropdownButton<String>(
-                      value: selectedLanguage,
-                      isExpanded: true,
-                      dropdownColor: const Color(0xFF2A2A2A),
-                      underline: const SizedBox(),
-                      style: const TextStyle(color: Colors.white),
-                      items: languages.map((lang) {
-                        return DropdownMenuItem<String>(
-                          value: lang['name'],
-                          child: Text(lang['name']!),
-                        );
-                      }).toList(),
-                      onChanged: (value) {
-                        setState(() {
-                          selectedLanguage = value!;
-                          selectedLanguageCode = languages.firstWhere(
-                                (l) => l['name'] == value,
-                          )['code']!;
-                        });
-                      },
-                    ),
+                  child: Column(
+                    children: [
+                      _option(
+                        Icons.notifications_rounded,
+                        'Notifications',
+                        'Manage alerts',
+                            () => _showComingSoon('Notifications'),
+                      ),
+                      _hDivider(),
+                      _option(
+                        Icons.privacy_tip_rounded,
+                        'Privacy Policy',
+                        'How we use your data',
+                            () => _showComingSoon('Privacy Policy'),
+                      ),
+                      _hDivider(),
+                      _option(
+                        Icons.help_rounded,
+                        'Help & Support',
+                        'Get assistance',
+                            () => _showComingSoon('Help & Support'),
+                      ),
+                      _hDivider(),
+                      _option(
+                        Icons.info_rounded,
+                        'About TranslateAR',
+                        'Version 1.0.0',
+                            () => showAboutDialog(
+                          context: context,
+                          applicationName: 'TranslateAR',
+                          applicationVersion: '1.0.0',
+                          applicationIcon: const Icon(
+                            Icons.translate,
+                            color: Color(0xFF10A37F),
+                            size: 40,
+                          ),
+                          children: [
+                            const Text(
+                              'Real-time AI translation using NLLB-200 model. Translate conversations directly to your earbuds.',
+                              style: TextStyle(fontSize: 14),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
-            ),
 
-            const SizedBox(height: 16),
+              const SizedBox(height: 14),
 
-            // Stats Card
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFF2A2A2A),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  _buildStat('Total', '24', 'Translations'),
-                  _buildDivider(),
-                  _buildStat('Today', '5', 'Translations'),
-                  _buildDivider(),
-                  _buildStat('Languages', '3', 'Used'),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: 16),
-
-            // Settings Options
-            _buildOption(
-              icon: Icons.notifications,
-              title: 'Notifications',
-              onTap: () {},
-            ),
-            _buildOption(
-              icon: Icons.privacy_tip,
-              title: 'Privacy Policy',
-              onTap: () {},
-            ),
-            _buildOption(
-              icon: Icons.help,
-              title: 'Help & Support',
-              onTap: () {},
-            ),
-            _buildOption(
-              icon: Icons.info,
-              title: 'About TranslateAR',
-              onTap: () {},
-            ),
-
-            const SizedBox(height: 16),
-
-            // Sign Out Button
-            SizedBox(
-              width: double.infinity,
-              height: 55,
-              child: ElevatedButton.icon(
-                onPressed: () async {
-                  await FirebaseAuth.instance.signOut();
-                  if (mounted) {
-                    Navigator.pushNamedAndRemoveUntil(
-                      context,
-                      '/',
-                          (route) => false,
+              // Sign out
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: GestureDetector(
+                  onTap: () async {
+                    final confirm = await showDialog<bool>(
+                      context: context,
+                      builder: (_) => AlertDialog(
+                        backgroundColor: const Color(0xFF0F0F1A),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(18),
+                          side:
+                          const BorderSide(color: Color(0xFF1E1E2E)),
+                        ),
+                        title: const Text('Sign Out',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700)),
+                        content: const Text(
+                          'Are you sure you want to sign out?',
+                          style: TextStyle(color: Color(0xFF555570)),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () =>
+                                Navigator.pop(context, false),
+                            child: const Text('Cancel',
+                                style:
+                                TextStyle(color: Color(0xFF555570))),
+                          ),
+                          TextButton(
+                            onPressed: () =>
+                                Navigator.pop(context, true),
+                            child: const Text('Sign Out',
+                                style: TextStyle(
+                                    color: Colors.red,
+                                    fontWeight: FontWeight.w600)),
+                          ),
+                        ],
+                      ),
                     );
-                  }
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.red.withOpacity(0.2),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    side: const BorderSide(color: Colors.red),
-                  ),
-                ),
-                icon: const Icon(Icons.logout, color: Colors.red),
-                label: const Text(
-                  'Sign Out',
-                  style: TextStyle(
-                    color: Colors.red,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
+                    if (confirm == true) {
+                      await FirebaseAuth.instance.signOut();
+                      if (mounted) {
+                        Navigator.pushAndRemoveUntil(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const AuthScreen()),
+                              (route) => false,
+                        );
+                      }
+                    }
+                  },
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 15),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withOpacity(0.04),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                          color: Colors.red.withOpacity(0.2)),
+                    ),
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.logout_rounded,
+                            color: Colors.red, size: 17),
+                        SizedBox(width: 8),
+                        Text('Sign Out',
+                            style: TextStyle(
+                                color: Colors.red,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600)),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
 
-            const SizedBox(height: 30),
-          ],
+              const SizedBox(height: 30),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildStat(String label, String value, String subtitle) {
+  void _showComingSoon(String feature) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$feature coming soon!'),
+        backgroundColor: const Color(0xFF10A37F),
+        behavior: SnackBarBehavior.floating,
+        shape:
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+  }
+
+  Widget _stat(String value, String label, IconData icon) {
     return Column(
       children: [
-        Text(
-          value,
-          style: const TextStyle(
-            color: Color(0xFF10A37F),
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        Text(
-          subtitle,
-          style: const TextStyle(color: Colors.grey, fontSize: 11),
-        ),
-        Text(
-          label,
-          style: const TextStyle(color: Colors.white70, fontSize: 12),
-        ),
+        Text(value,
+            style: const TextStyle(
+                color: Color(0xFF10A37F),
+                fontSize: 24,
+                fontWeight: FontWeight.w700)),
+        const SizedBox(height: 2),
+        Text(label,
+            style: const TextStyle(
+                color: Color(0xFF444460), fontSize: 12)),
       ],
     );
   }
 
-  Widget _buildDivider() {
-    return Container(
-      height: 40,
-      width: 1,
-      color: Colors.grey.withOpacity(0.3),
-    );
-  }
+  Widget _vDivider() =>
+      Container(width: 1, height: 34, color: const Color(0xFF141425));
 
-  Widget _buildOption({
-    required IconData icon,
-    required String title,
-    required VoidCallback onTap,
-  }) {
+  Widget _hDivider() => Container(
+      height: 1,
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      color: const Color(0xFF141425));
+
+  Widget _option(
+      IconData icon, String title, String subtitle, VoidCallback onTap) {
     return GestureDetector(
       onTap: onTap,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: const Color(0xFF2A2A2A),
-          borderRadius: BorderRadius.circular(12),
-        ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
         child: Row(
           children: [
-            Icon(icon, color: const Color(0xFF10A37F)),
-            const SizedBox(width: 16),
-            Text(
-              title,
-              style: const TextStyle(color: Colors.white, fontSize: 16),
+            Container(
+              width: 34, height: 34,
+              decoration: BoxDecoration(
+                color: const Color(0xFF10A37F).withOpacity(0.08),
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Icon(icon, color: const Color(0xFF10A37F), size: 17),
             ),
-            const Spacer(),
-            const Icon(
-              Icons.arrow_forward_ios,
-              color: Colors.grey,
-              size: 16,
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: const TextStyle(
+                          color: Color(0xFF8888A8),
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500)),
+                  Text(subtitle,
+                      style: const TextStyle(
+                          color: Color(0xFF2A2A3A), fontSize: 11)),
+                ],
+              ),
             ),
+            const Icon(Icons.chevron_right_rounded,
+                color: Color(0xFF2A2A3A), size: 18),
           ],
         ),
       ),

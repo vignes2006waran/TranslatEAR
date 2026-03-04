@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -8,400 +9,516 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  // Voice Settings
+  final FlutterTts _tts = FlutterTts();
+
+  // Voice
   double voiceSpeed = 0.5;
   double voiceVolume = 1.0;
+  double voicePitch = 1.0;
 
-  // ANC Setting
+  // Translation
+  bool autoDetect = true;
+
+  // ANC
   bool ancEnabled = false;
 
-  // Activation Method Settings
-  bool shakeToActivate = false;
+  // Activation
   bool inAppButton = true;
+  bool shakeToActivate = false;
   bool voiceCommand = false;
   bool doubleTapEarbud = false;
-  bool autoActivate = false;
   bool wearDetection = false;
+  bool autoActivate = false;
   bool scheduleActivate = false;
-  bool volumeButtonHold = false;
+  bool volumeDoubleClick = true;
 
-  // Auto detect language
-  bool autoDetect = true;
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initTts();
+  }
+
+  Future<void> _initTts() async {
+    await _tts.setLanguage('ta-IN');
+    await _tts.setSpeechRate(voiceSpeed);
+    await _tts.setVolume(voiceVolume);
+    await _tts.setPitch(voicePitch);
+  }
+
+  Future<void> _previewVoice() async {
+    await _tts.setSpeechRate(voiceSpeed);
+    await _tts.setVolume(voiceVolume);
+    await _tts.setPitch(voicePitch);
+    await _tts.speak('வணக்கம், இது ஒரு சோதனை குரல்');
+  }
+
+  Future<void> _saveSettings() async {
+    setState(() => _isSaving = true);
+
+    // Apply TTS settings
+    await _tts.setSpeechRate(voiceSpeed);
+    await _tts.setVolume(voiceVolume);
+    await _tts.setPitch(voicePitch);
+
+    await Future.delayed(const Duration(milliseconds: 600));
+    setState(() => _isSaving = false);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Row(
+            children: [
+              Icon(Icons.check_circle_rounded,
+                  color: Colors.white, size: 18),
+              SizedBox(width: 8),
+              Text('Settings saved!'),
+            ],
+          ),
+          backgroundColor: const Color(0xFF10A37F),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12)),
+          margin: const EdgeInsets.all(16),
+        ),
+      );
+      Navigator.pop(context);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF212121),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF2A2A2A),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: const Text(
-          'Settings',
-          style: TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
+      backgroundColor: const Color(0xFF0A0A0F),
+      body: SafeArea(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-
-            // Voice Settings
-            _buildSectionTitle('🔊 Voice Settings'),
-            const SizedBox(height: 12),
-
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFF2A2A2A),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Column(
+            // Top bar
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+              child: Row(
                 children: [
-                  // Voice Speed
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.speed,
-                        color: Color(0xFF10A37F),
+                  GestureDetector(
+                    onTap: () => Navigator.pop(context),
+                    child: Container(
+                      width: 36, height: 36,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0F0F1A),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: const Color(0xFF1E1E2E)),
                       ),
-                      const SizedBox(width: 12),
-                      const Expanded(
-                        child: Text(
-                          'Voice Speed',
-                          style: TextStyle(color: Colors.white),
-                        ),
-                      ),
-                      Text(
-                        voiceSpeed <= 0.3
-                            ? 'Slow'
-                            : voiceSpeed <= 0.6
-                            ? 'Normal'
-                            : 'Fast',
-                        style: const TextStyle(
-                          color: Color(0xFF10A37F),
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  ),
-                  Slider(
-                    value: voiceSpeed,
-                    min: 0.1,
-                    max: 1.0,
-                    activeColor: const Color(0xFF10A37F),
-                    inactiveColor: Colors.grey.withOpacity(0.3),
-                    onChanged: (value) {
-                      setState(() => voiceSpeed = value);
-                    },
-                  ),
-
-                  const Divider(color: Colors.grey),
-
-                  // Voice Volume
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.volume_up,
-                        color: Color(0xFF10A37F),
-                      ),
-                      const SizedBox(width: 12),
-                      const Expanded(
-                        child: Text(
-                          'Voice Volume',
-                          style: TextStyle(color: Colors.white),
-                        ),
-                      ),
-                      Text(
-                        '${(voiceVolume * 100).toInt()}%',
-                        style: const TextStyle(
-                          color: Color(0xFF10A37F),
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  ),
-                  Slider(
-                    value: voiceVolume,
-                    min: 0.0,
-                    max: 1.0,
-                    activeColor: const Color(0xFF10A37F),
-                    inactiveColor: Colors.grey.withOpacity(0.3),
-                    onChanged: (value) {
-                      setState(() => voiceVolume = value);
-                    },
-                  ),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: 24),
-
-            // Translation Settings
-            _buildSectionTitle('🌐 Translation Settings'),
-            const SizedBox(height: 12),
-
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFF2A2A2A),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Column(
-                children: [
-                  _buildToggle(
-                    icon: Icons.auto_awesome,
-                    title: 'Auto Detect Language',
-                    subtitle: 'Automatically detect spoken language',
-                    value: autoDetect,
-                    onChanged: (value) {
-                      setState(() => autoDetect = value);
-                    },
-                  ),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: 24),
-
-            // ANC Settings
-            _buildSectionTitle('🎧 Noise Cancellation'),
-            const SizedBox(height: 12),
-
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFF2A2A2A),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: _buildToggle(
-                icon: Icons.noise_control_off,
-                title: 'Enable ANC',
-                subtitle: 'Block background noise during translation',
-                value: ancEnabled,
-                onChanged: (value) {
-                  setState(() => ancEnabled = value);
-                },
-              ),
-            ),
-
-            const SizedBox(height: 24),
-
-            // Activation Method
-            _buildSectionTitle('🤌 Activation Method'),
-            const SizedBox(height: 8),
-            const Text(
-              'Choose how to activate translation',
-              style: TextStyle(color: Colors.grey, fontSize: 13),
-            ),
-            const SizedBox(height: 12),
-
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFF2A2A2A),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Column(
-                children: [
-                  // 1
-                  _buildToggle(
-                    icon: Icons.touch_app,
-                    title: 'In-App Button',
-                    subtitle: 'Use the big button in home screen',
-                    value: inAppButton,
-                    onChanged: (value) {
-                      setState(() => inAppButton = value);
-                    },
-                  ),
-
-                  const Divider(color: Colors.grey),
-
-                  // 2
-                  _buildToggle(
-                    icon: Icons.phone_android,
-                    title: 'Shake Phone',
-                    subtitle: 'Shake phone twice to activate/deactivate',
-                    value: shakeToActivate,
-                    onChanged: (value) {
-                      setState(() => shakeToActivate = value);
-                    },
-                  ),
-
-                  const Divider(color: Colors.grey),
-
-                  // 3
-                  _buildToggle(
-                    icon: Icons.mic,
-                    title: 'Voice Command',
-                    subtitle: 'Say "Hey Translate" to activate',
-                    value: voiceCommand,
-                    onChanged: (value) {
-                      setState(() => voiceCommand = value);
-                    },
-                  ),
-
-                  const Divider(color: Colors.grey),
-
-                  // 4
-                  _buildToggle(
-                    icon: Icons.headphones,
-                    title: 'Double Tap Earbud',
-                    subtitle: 'Double tap your earbud to activate',
-                    value: doubleTapEarbud,
-                    onChanged: (value) {
-                      setState(() => doubleTapEarbud = value);
-                    },
-                  ),
-
-                  const Divider(color: Colors.grey),
-
-                  // 5
-                  _buildToggle(
-                    icon: Icons.hearing,
-                    title: 'Wear Detection',
-                    subtitle: 'Auto activate when earbuds are worn',
-                    value: wearDetection,
-                    onChanged: (value) {
-                      setState(() => wearDetection = value);
-                    },
-                  ),
-
-                  const Divider(color: Colors.grey),
-
-                  // 6
-                  _buildToggle(
-                    icon: Icons.auto_mode,
-                    title: 'Auto Activate',
-                    subtitle: 'Activate when foreign speech is detected',
-                    value: autoActivate,
-                    onChanged: (value) {
-                      setState(() => autoActivate = value);
-                    },
-                  ),
-
-                  const Divider(color: Colors.grey),
-
-                  // 7
-                  _buildToggle(
-                    icon: Icons.schedule,
-                    title: 'Schedule Activation',
-                    subtitle: 'Set time to auto activate translation',
-                    value: scheduleActivate,
-                    onChanged: (value) {
-                      setState(() => scheduleActivate = value);
-                    },
-                  ),
-                  const Divider(color: Colors.grey),
-
-// 8
-                  _buildToggle(
-                    icon: Icons.volume_down,
-                    title: 'Volume Button Hold',
-                    subtitle: 'Hold volume down 3 seconds to activate (works with screen off)',
-                    value: volumeButtonHold,
-                    onChanged: (value) {
-                      setState(() => volumeButtonHold = value);
-                    },
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            // Save Button
-            SizedBox(
-              width: double.infinity,
-              height: 55,
-              child: ElevatedButton(
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Settings saved!'),
-                      backgroundColor: Color(0xFF10A37F),
+                      child: const Icon(Icons.arrow_back_rounded,
+                          color: Color(0xFF8888A8), size: 17),
                     ),
-                  );
-                  Navigator.pop(context);
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF10A37F),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
                   ),
-                ),
-                child: const Text(
-                  'Save Settings',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
+                  const SizedBox(width: 12),
+                  const Text('Settings',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.5)),
+                ],
               ),
             ),
 
-            const SizedBox(height: 30),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 16),
+
+                    // ── Voice Settings ──
+                    _sectionTitle('Voice Output'),
+                    const SizedBox(height: 10),
+                    _card(Column(
+                      children: [
+                        // Speed
+                        _sliderTile(
+                          icon: Icons.speed_rounded,
+                          title: 'Speech Speed',
+                          tag: voiceSpeed <= 0.3
+                              ? 'Slow'
+                              : voiceSpeed <= 0.6
+                              ? 'Normal'
+                              : 'Fast',
+                          value: voiceSpeed,
+                          min: 0.1,
+                          max: 1.0,
+                          onChanged: (v) => setState(() => voiceSpeed = v),
+                        ),
+                        _cardLine(),
+                        // Volume
+                        _sliderTile(
+                          icon: Icons.volume_up_rounded,
+                          title: 'Voice Volume',
+                          tag: '${(voiceVolume * 100).toInt()}%',
+                          value: voiceVolume,
+                          min: 0.0,
+                          max: 1.0,
+                          onChanged: (v) => setState(() => voiceVolume = v),
+                        ),
+                        _cardLine(),
+                        // Pitch
+                        _sliderTile(
+                          icon: Icons.music_note_rounded,
+                          title: 'Voice Pitch',
+                          tag: voicePitch < 0.8
+                              ? 'Low'
+                              : voicePitch > 1.2
+                              ? 'High'
+                              : 'Normal',
+                          value: voicePitch,
+                          min: 0.5,
+                          max: 2.0,
+                          onChanged: (v) => setState(() => voicePitch = v),
+                        ),
+                        _cardLine(),
+                        // Preview button
+                        GestureDetector(
+                          onTap: _previewVoice,
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 34, height: 34,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF10A37F)
+                                        .withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(9),
+                                  ),
+                                  child: const Icon(
+                                      Icons.play_circle_outline_rounded,
+                                      color: Color(0xFF10A37F), size: 18),
+                                ),
+                                const SizedBox(width: 12),
+                                const Text('Preview Voice',
+                                    style: TextStyle(
+                                        color: Color(0xFF10A37F),
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w500)),
+                                const Spacer(),
+                                const Text('Tap to test',
+                                    style: TextStyle(
+                                        color: Color(0xFF444460),
+                                        fontSize: 12)),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    )),
+
+                    const SizedBox(height: 22),
+
+                    // ── Translation ──
+                    _sectionTitle('Translation'),
+                    const SizedBox(height: 10),
+                    _card(_toggleTile(
+                      icon: Icons.auto_awesome_rounded,
+                      title: 'Auto Detect Language',
+                      subtitle: 'Automatically detect spoken language',
+                      value: autoDetect,
+                      onChanged: (v) => setState(() => autoDetect = v),
+                    )),
+
+                    const SizedBox(height: 22),
+
+                    // ── ANC ──
+                    _sectionTitle('Noise Cancellation'),
+                    const SizedBox(height: 10),
+                    _card(_toggleTile(
+                      icon: Icons.noise_control_off_rounded,
+                      title: 'Enable ANC',
+                      subtitle: 'Reduce background noise during translation',
+                      value: ancEnabled,
+                      onChanged: (v) => setState(() => ancEnabled = v),
+                    )),
+
+                    const SizedBox(height: 22),
+
+                    // ── Activation Methods ──
+                    _sectionTitle('Activation Methods'),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Choose how to start/stop translation',
+                      style:
+                      TextStyle(color: Color(0xFF444460), fontSize: 12),
+                    ),
+                    const SizedBox(height: 10),
+                    _card(Column(
+                      children: [
+                        _toggleTile(
+                          icon: Icons.touch_app_rounded,
+                          title: 'In-App Orb Button',
+                          subtitle: 'Tap the big orb on home screen',
+                          value: inAppButton,
+                          onChanged: (v) =>
+                              setState(() => inAppButton = v),
+                        ),
+                        _cardLine(),
+                        _toggleTile(
+                          icon: Icons.volume_down_rounded,
+                          title: 'Double Press Volume ↓',
+                          subtitle: 'Works even with screen off',
+                          value: volumeDoubleClick,
+                          onChanged: (v) =>
+                              setState(() => volumeDoubleClick = v),
+                        ),
+                        _cardLine(),
+                        _toggleTile(
+                          icon: Icons.phone_android_rounded,
+                          title: 'Shake Phone',
+                          subtitle: 'Shake device twice to activate',
+                          value: shakeToActivate,
+                          onChanged: (v) =>
+                              setState(() => shakeToActivate = v),
+                        ),
+                        _cardLine(),
+                        _toggleTile(
+                          icon: Icons.mic_rounded,
+                          title: 'Voice Command',
+                          subtitle: 'Say "Hey Translate" to activate',
+                          value: voiceCommand,
+                          onChanged: (v) =>
+                              setState(() => voiceCommand = v),
+                        ),
+                        _cardLine(),
+                        _toggleTile(
+                          icon: Icons.headphones_rounded,
+                          title: 'Double Tap Earbud',
+                          subtitle: 'Double tap your earbud',
+                          value: doubleTapEarbud,
+                          onChanged: (v) =>
+                              setState(() => doubleTapEarbud = v),
+                        ),
+                        _cardLine(),
+                        _toggleTile(
+                          icon: Icons.hearing_rounded,
+                          title: 'Wear Detection',
+                          subtitle: 'Auto-activate when earbuds are worn',
+                          value: wearDetection,
+                          onChanged: (v) =>
+                              setState(() => wearDetection = v),
+                        ),
+                        _cardLine(),
+                        _toggleTile(
+                          icon: Icons.auto_mode_rounded,
+                          title: 'Auto Activate',
+                          subtitle: 'Activates when foreign language detected',
+                          value: autoActivate,
+                          onChanged: (v) =>
+                              setState(() => autoActivate = v),
+                        ),
+                        _cardLine(),
+                        _toggleTile(
+                          icon: Icons.schedule_rounded,
+                          title: 'Schedule Activation',
+                          subtitle: 'Set a time to auto-activate',
+                          value: scheduleActivate,
+                          onChanged: (v) =>
+                              setState(() => scheduleActivate = v),
+                        ),
+                      ],
+                    )),
+
+                    const SizedBox(height: 24),
+
+                    // Save button
+                    GestureDetector(
+                      onTap: _isSaving ? null : _saveSettings,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        width: double.infinity,
+                        height: 54,
+                        decoration: BoxDecoration(
+                          color: _isSaving
+                              ? const Color(0xFF10A37F).withOpacity(0.4)
+                              : const Color(0xFF10A37F),
+                          borderRadius: BorderRadius.circular(15),
+                          boxShadow: _isSaving
+                              ? []
+                              : [
+                            BoxShadow(
+                              color: const Color(0xFF10A37F)
+                                  .withOpacity(0.35),
+                              blurRadius: 20,
+                              offset: const Offset(0, 6),
+                            ),
+                          ],
+                        ),
+                        child: Center(
+                          child: _isSaving
+                              ? const SizedBox(
+                            width: 22, height: 22,
+                            child: CircularProgressIndicator(
+                                color: Colors.white, strokeWidth: 2.5),
+                          )
+                              : const Text(
+                            'Save Settings',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 30),
+                  ],
+                ),
+              ),
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildSectionTitle(String title) {
-    return Text(
-      title,
-      style: const TextStyle(
+  Widget _sectionTitle(String text) => Text(
+    text,
+    style: const TextStyle(
         color: Colors.white,
-        fontSize: 18,
-        fontWeight: FontWeight.bold,
+        fontSize: 16,
+        fontWeight: FontWeight.w700,
+        letterSpacing: -0.3),
+  );
+
+  Widget _card(Widget child) => Container(
+    decoration: BoxDecoration(
+      color: const Color(0xFF0F0F1A),
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: const Color(0xFF141425)),
+    ),
+    child: child,
+  );
+
+  Widget _cardLine() => Container(
+    height: 1,
+    margin: const EdgeInsets.symmetric(horizontal: 16),
+    color: const Color(0xFF141425),
+  );
+
+  Widget _sliderTile({
+    required IconData icon,
+    required String title,
+    required String tag,
+    required double value,
+    required double min,
+    required double max,
+    required Function(double) onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 34, height: 34,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF10A37F).withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child: Icon(icon, color: const Color(0xFF10A37F), size: 17),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(title,
+                    style: const TextStyle(
+                        color: Color(0xFF8888A8),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500)),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF10A37F).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(7),
+                ),
+                child: Text(tag,
+                    style: const TextStyle(
+                        color: Color(0xFF10A37F),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600)),
+              ),
+            ],
+          ),
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              activeTrackColor: const Color(0xFF10A37F),
+              inactiveTrackColor:
+              const Color(0xFF10A37F).withOpacity(0.12),
+              thumbColor: const Color(0xFF10A37F),
+              overlayColor:
+              const Color(0xFF10A37F).withOpacity(0.1),
+              trackHeight: 3,
+              thumbShape:
+              const RoundSliderThumbShape(enabledThumbRadius: 7),
+            ),
+            child: Slider(
+                value: value, min: min, max: max, onChanged: onChanged),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildToggle({
+  Widget _toggleTile({
     required IconData icon,
     required String title,
     required String subtitle,
     required bool value,
     required Function(bool) onChanged,
   }) {
-    return Row(
-      children: [
-        Icon(icon, color: const Color(0xFF10A37F)),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                ),
-              ),
-              Text(
-                subtitle,
-                style: const TextStyle(
-                  color: Colors.grey,
-                  fontSize: 12,
-                ),
-              ),
-            ],
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+      child: Row(
+        children: [
+          Container(
+            width: 34, height: 34,
+            decoration: BoxDecoration(
+              color: const Color(0xFF10A37F).withOpacity(0.08),
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: Icon(icon, color: const Color(0xFF10A37F), size: 17),
           ),
-        ),
-        Switch(
-          value: value,
-          activeColor: const Color(0xFF10A37F),
-          onChanged: onChanged,
-        ),
-      ],
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: const TextStyle(
+                        color: Color(0xFF8888A8),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500)),
+                const SizedBox(height: 2),
+                Text(subtitle,
+                    style: const TextStyle(
+                        color: Color(0xFF2A2A3A), fontSize: 11)),
+              ],
+            ),
+          ),
+          Transform.scale(
+            scale: 0.82,
+            child: Switch(
+              value: value,
+              activeColor: const Color(0xFF10A37F),
+              activeTrackColor:
+              const Color(0xFF10A37F).withOpacity(0.3),
+              inactiveThumbColor: const Color(0xFF333350),
+              inactiveTrackColor: const Color(0xFF1E1E2E),
+              onChanged: onChanged,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
