@@ -1,8 +1,7 @@
 package com.example.translation_app
 
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.AudioDeviceInfo
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.content.Context
@@ -28,47 +27,39 @@ class MainActivity : FlutterActivity() {
     private val DOUBLE_PRESS_DELAY = 500L
     private val handler = Handler(Looper.getMainLooper())
 
-    private var micType     = "phone"   // "phone" or "bluetooth"
-    private var speakerType = "phone"   // "phone" or "bluetooth"
+    private var micType     = "phone"
+    private var speakerType = "phone"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // ── Audio config channel ─────────────────────────────────────────────
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, AUDIO_CHANNEL)
             .setMethodCallHandler { call, result ->
                 val audio = getSystemService(Context.AUDIO_SERVICE) as AudioManager
                 try {
                     when (call.method) {
-
                         "setMic" -> {
                             micType = call.argument<String>("type") ?: "phone"
+                            applyAudioRouting(audio)
                             result.success(true)
                         }
-
                         "setSpeaker" -> {
                             speakerType = call.argument<String>("type") ?: "phone"
+                            applyAudioRouting(audio)
                             result.success(true)
                         }
-
-                        // ── Called just before speech recognition starts ──────
                         "prepareForListening" -> {
                             prepareForListening(audio)
                             result.success(true)
                         }
-
-                        // ── Called just before TTS speaks ────────────────────
                         "prepareForSpeaking" -> {
                             prepareForSpeaking(audio)
                             result.success(true)
                         }
-
-                        // ── Called after TTS finishes, back to listening ──────
                         "restoreAfterSpeaking" -> {
                             prepareForListening(audio)
                             result.success(true)
                         }
-
                         else -> result.notImplemented()
                     }
                 } catch (e: Exception) {
@@ -76,7 +67,6 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
-        // ── Volume button event channel ──────────────────────────────────────
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL)
             .setStreamHandler(object : EventChannel.StreamHandler {
                 override fun onListen(arguments: Any?, sink: EventChannel.EventSink?) {
@@ -87,7 +77,6 @@ class MainActivity : FlutterActivity() {
                 }
             })
 
-        // ── Bluetooth devices channel ────────────────────────────────────────
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BT_CHANNEL)
             .setMethodCallHandler { call, result ->
                 if (call.method == "getConnectedDevices") {
@@ -98,76 +87,77 @@ class MainActivity : FlutterActivity() {
             }
     }
 
-    // ── Prepare audio for LISTENING ──────────────────────────────────────────
-    //
-    //  mic=phone  → stop BT SCO completely so Android uses phone mic
-    //  mic=bt     → start BT SCO so earbud mic is active
-    //
-    private fun prepareForListening(audio: AudioManager) {
-        when (micType) {
-            "phone" -> {
-                // Stop ALL Bluetooth SCO — this forces Android to use phone mic
-                audio.stopBluetoothSco()
-                audio.isBluetoothScoOn = false
-                audio.mode = AudioManager.MODE_NORMAL
-                audio.isSpeakerphoneOn = false
+    private fun forcePhoneSpeaker(audio: AudioManager) {
+        audio.stopBluetoothSco()
+        audio.isBluetoothScoOn = false
+        audio.mode = AudioManager.MODE_NORMAL
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val devices = audio.availableCommunicationDevices
+            val speaker = devices.firstOrNull {
+                it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
             }
-            "bluetooth" -> {
-                // Start BT SCO so earbud mic is captured
-                audio.mode = AudioManager.MODE_IN_COMMUNICATION
-                audio.startBluetoothSco()
-                audio.isBluetoothScoOn = true
-                audio.isSpeakerphoneOn = false
+            if (speaker != null) {
+                audio.setCommunicationDevice(speaker)
+            } else {
+                audio.isSpeakerphoneOn = true
+            }
+        } else {
+            audio.isSpeakerphoneOn = true
+        }
+    }
+
+    private fun forceBluetoothSpeaker(audio: AudioManager) {
+        audio.mode = AudioManager.MODE_IN_COMMUNICATION
+        audio.startBluetoothSco()
+        audio.isBluetoothScoOn = true
+        audio.isSpeakerphoneOn = false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val devices = audio.availableCommunicationDevices
+            val btDevice = devices.firstOrNull {
+                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                        it.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+            }
+            if (btDevice != null) {
+                audio.setCommunicationDevice(btDevice)
             }
         }
     }
 
-    // ── Prepare audio for SPEAKING (TTS) ────────────────────────────────────
-    //
-    //  mic=phone,  speaker=phone  → speakerphone, no SCO
-    //  mic=phone,  speaker=bt     → A2DP output (MODE_NORMAL, no SCO)
-    //                               Android auto-routes media audio to A2DP
-    //                               without activating BT mic at all
-    //  mic=bt,     speaker=phone  → stop SCO, use speakerphone for output
-    //  mic=bt,     speaker=bt     → SCO active, earbud handles both
-    //
-    private fun prepareForSpeaking(audio: AudioManager) {
+    private fun applyAudioRouting(audio: AudioManager) {
         when {
-            // ── Phone mic + Phone speaker ────────────────────────────────────
             micType == "phone" && speakerType == "phone" -> {
-                audio.stopBluetoothSco()
-                audio.isBluetoothScoOn = false
-                audio.mode = AudioManager.MODE_NORMAL
-                audio.isSpeakerphoneOn = true
+                forcePhoneSpeaker(audio)
             }
-
-            // ── Phone mic + Earbud speaker ───────────────────────────────────
-            // KEY: Use A2DP (MODE_NORMAL, no SCO). A2DP plays audio to earbuds
-            // as a media stream WITHOUT activating the earbud microphone.
-            // This is the only way to have phone mic + earbud speaker.
             micType == "phone" && speakerType == "bluetooth" -> {
                 audio.stopBluetoothSco()
                 audio.isBluetoothScoOn = false
                 audio.mode = AudioManager.MODE_NORMAL
                 audio.isSpeakerphoneOn = false
-                // A2DP handles output automatically in MODE_NORMAL
-                // when earbuds are connected — no extra call needed
             }
-
-            // ── Earbud mic + Phone speaker ───────────────────────────────────
-            // SCO was active for mic. For TTS output we want phone speaker.
-            // Stop SCO (releases earbud mic), switch to speakerphone.
-            // Note: mic won't capture during TTS anyway, so this is fine.
             micType == "bluetooth" && speakerType == "phone" -> {
+                audio.mode = AudioManager.MODE_IN_COMMUNICATION
+                audio.startBluetoothSco()
+                audio.isBluetoothScoOn = true
+                forcePhoneSpeaker(audio)
+            }
+            micType == "bluetooth" && speakerType == "bluetooth" -> {
+                forceBluetoothSpeaker(audio)
+            }
+        }
+    }
+
+    private fun prepareForListening(audio: AudioManager) {
+        when (micType) {
+            "phone" -> {
                 audio.stopBluetoothSco()
                 audio.isBluetoothScoOn = false
                 audio.mode = AudioManager.MODE_NORMAL
-                audio.isSpeakerphoneOn = true
+                audio.isSpeakerphoneOn = false
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    audio.clearCommunicationDevice()
+                }
             }
-
-            // ── Earbud mic + Earbud speaker ──────────────────────────────────
-            // Full SCO: mic + speaker both through earbuds
-            micType == "bluetooth" && speakerType == "bluetooth" -> {
+            "bluetooth" -> {
                 audio.mode = AudioManager.MODE_IN_COMMUNICATION
                 audio.startBluetoothSco()
                 audio.isBluetoothScoOn = true
@@ -176,7 +166,10 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    // ── Volume double press ──────────────────────────────────────────────────
+    private fun prepareForSpeaking(audio: AudioManager) {
+        applyAudioRouting(audio)
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
             val now = System.currentTimeMillis()
@@ -196,7 +189,6 @@ class MainActivity : FlutterActivity() {
         return super.onKeyUp(keyCode, event)
     }
 
-    // ── Get connected Bluetooth devices ─────────────────────────────────────
     private fun getConnectedBluetoothDevices(callback: (List<Map<String, String>>) -> Unit) {
         val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         val adapter = btManager.adapter

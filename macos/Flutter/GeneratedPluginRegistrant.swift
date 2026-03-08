@@ -13,6 +13,7 @@ import flutter_blue_plus_darwin
 import flutter_tts
 import google_sign_in_ios
 import just_audio
+import shared_preferences_foundation
 import speech_to_text
 import volume_controller
 
@@ -25,6 +26,7 @@ func RegisterGeneratedPlugins(registry: FlutterPluginRegistry) {
   FlutterTtsPlugin.register(with: registry.registrar(forPlugin: "FlutterTtsPlugin"))
   FLTGoogleSignInPlugin.register(with: registry.registrar(forPlugin: "FLTGoogleSignInPlugin"))
   JustAudioPlugin.register(with: registry.registrar(forPlugin: "JustAudioPlugin"))
+  SharedPreferencesPlugin.register(with: registry.registrar(forPlugin: "SharedPreferencesPlugin"))
   SpeechToTextPlugin.register(with: registry.registrar(forPlugin: "SpeechToTextPlugin"))
   VolumeControllerPlugin.register(with: registry.registrar(forPlugin: "VolumeControllerPlugin"))
 }

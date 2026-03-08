@@ -25,9 +25,10 @@ dependencies:
   just_audio: ^0.10.5
 
   # Offline ONNX inference
-  onnxruntime: 1.4.1
   path_provider: 2.1.4
-  dio: 5.7.0
+  google_mlkit_translation: ^0.13.1
+  google_mlkit_language_id: ^0.13.1
+  shared_preferences: ^2.5.4
 
 dev_dependencies:
   flutter_test:
