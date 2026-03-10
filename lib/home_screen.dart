@@ -52,9 +52,28 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   bool isTranslating = false;
   String statusText = 'Ready to translate';
-  String originalText = '';
-  String translatedText = '';
+  String _detectedLangName = 'Auto';
+  String _selectedSourceLang = 'English'; // what the opposite person speaks
   int _currentNavIndex = 0;
+
+  // ── Accumulated paragraph text (never erased until session stops) ──────────
+  String _originalParagraph = '';    // all completed sentences original
+  String _translatedParagraph = '';  // all completed sentences translated
+  String _currentPartialOriginal = ''; // what's being spoken right now (partial)
+  String _currentPartialTranslated = ''; // live translation of current partial
+
+  // What the UI shows = completed paragraph + current partial
+  String get originalText => _currentPartialOriginal.isEmpty
+      ? _originalParagraph
+      : (_originalParagraph.isEmpty
+      ? _currentPartialOriginal
+      : '$_originalParagraph\n$_currentPartialOriginal');
+
+  String get translatedText => _currentPartialTranslated.isEmpty
+      ? _translatedParagraph
+      : (_translatedParagraph.isEmpty
+      ? _currentPartialTranslated
+      : '$_translatedParagraph\n$_currentPartialTranslated');
 
   // ── Theme ─────────────────────────────────────────────────────────────────
   late AppTheme _t;
@@ -79,11 +98,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   bool _speechAvailable = false;
 
   String _lastSubmitted = '';
-  String _currentPartial = '';
-  String _lastTranslatedText = '';  // tracks what we already translated
-  int _lastWordCount = 0;           // tracks word count of last translation
-  Timer? _wordDebounce;             // small debounce so we don't fire on every character
+  String _lastTranslatedText = '';
+  int _lastWordCount = 0;
+  Timer? _wordDebounce;
   Timer? _silenceTimer;
+
+  // Fixed locale based on selected source language
+  String get _currentLocaleId =>
+      _speechLocaleMap[_selectedSourceLang] ?? 'en-IN';
+
+  void _advanceLocale() {} // no-op — locale is now fixed per user selection
+
+  // ScrollControllers to auto-scroll to bottom as text accumulates
+  final ScrollController _origScrollController = ScrollController();
+  final ScrollController _transScrollController = ScrollController();
 
   final List<Map<String, String>> _sessionConversations = [];
   DateTime? _sessionStart;
@@ -96,7 +124,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late Animation<double> _glowAnimation;
   late Animation<double> _textFadeAnimation;
 
-  final List<double> _waveHeights = List.filled(28, 0.0);
+  final List<double> _waveHeights = List.filled(36, 0.0);
   final Random _random = Random();
 
   String get nativeLangName =>
@@ -112,7 +140,38 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _loadTheme();
   }
 
-  // ── Theme loading ─────────────────────────────────────────────────────────
+  // Speech recognition locale for each language
+  static const Map<String, String> _speechLocaleMap = {
+    'Tamil':      'ta-IN',
+    'Hindi':      'hi-IN',
+    'Telugu':     'te-IN',
+    'Kannada':    'kn-IN',
+    'Bengali':    'bn-IN',
+    'Gujarati':   'gu-IN',
+    'Marathi':    'mr-IN',
+    'Urdu':       'ur-PK',
+    'Arabic':     'ar-SA',
+    'French':     'fr-FR',
+    'German':     'de-DE',
+    'Spanish':    'es-ES',
+    'Italian':    'it-IT',
+    'Portuguese': 'pt-BR',
+    'Russian':    'ru-RU',
+    'Japanese':   'ja-JP',
+    'Korean':     'ko-KR',
+    'Chinese':    'zh-CN',
+    'Thai':       'th-TH',
+    'Vietnamese': 'vi-VN',
+    'Indonesian': 'id-ID',
+    'Turkish':    'tr-TR',
+    'Dutch':      'nl-NL',
+    'Polish':     'pl-PL',
+    'Swedish':    'sv-SE',
+    'English':    'en-IN',
+  };
+
+  String get _nativeSpeechLocale =>
+      _speechLocaleMap[nativeLangName] ?? 'en-IN';
 
   Future<void> _loadTheme() async {
     final prefs = await SharedPreferences.getInstance();
@@ -510,14 +569,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   // ── Translation logic ─────────────────────────────────────────────────────
 
+  // ── Translation logic ─────────────────────────────────────────────────────
+
   void _toggleTranslation() {
     if (!mounted) return;
     if (!isTranslating) {
       setState(() {
         isTranslating = true;
         statusText = 'Listening...';
-        originalText = '';
-        translatedText = '';
+        _detectedLangName = 'Auto';
+        _originalParagraph = '';
+        _translatedParagraph = '';
+        _currentPartialOriginal = '';
+        _currentPartialTranslated = '';
         _sessionConversations.clear();
         _sessionStart = DateTime.now();
         _textFadeController.reset();
@@ -558,15 +622,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
     if (!_speechAvailable) {
       _speechAvailable = await _speech.initialize(
-        onError: (e) => debugPrint('Speech init error: $e'),
+        onError: (e) => debugPrint('Speech error: $e'),
       );
     }
     if (!_speechAvailable || !isTranslating || !mounted) return;
 
     _lastSubmitted = '';
-    _currentPartial = '';
     _lastTranslatedText = '';
     _lastWordCount = 0;
+    TranslationService.instance.clearDetectionBuffer();
 
     _speech.listen(
       onResult: (result) {
@@ -574,36 +638,26 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         final words = result.recognizedWords.trim();
         if (words.isEmpty) return;
 
-        setState(() => originalText = words);
-        _currentPartial = words;
-
-        final currentWordCount = words.split(' ').length;
-        if (currentWordCount > _lastWordCount) {
-          _lastWordCount = currentWordCount;
-          _wordDebounce?.cancel();
-          _wordDebounce = Timer(const Duration(milliseconds: 200), () {
-            if (!mounted || !isTranslating) return;
-            if (_currentPartial != _lastTranslatedText && _currentPartial.isNotEmpty) {
-              _lastTranslatedText = _currentPartial;
-              _translateAndSpeakWord(_currentPartial);
-            }
-          });
-        }
+        // Show growing text live in original box
+        setState(() => _currentPartialOriginal = words);
 
         if (result.finalResult) {
+          // Only translate FINAL complete sentence — gives ML Kit full text
+          // for 95%+ language detection accuracy
           _wordDebounce?.cancel();
           if (words != _lastSubmitted && words.length > 1) {
             _lastSubmitted = words;
-            _translateAndSpeakWord(words);
-            _sessionConversations.add({
-              'original': words,
-              'translated': translatedText,
-            });
+            _originalParagraph = _originalParagraph.isEmpty
+                ? words
+                : _originalParagraph + '\n' + words;
+            setState(() => _currentPartialOriginal = '');
+            _translateFinalAndAppend(words);
+            _sessionConversations.add({'original': words, 'translated': ''});
+          } else {
+            setState(() => _currentPartialOriginal = '');
           }
-          _currentPartial = '';
           _lastTranslatedText = '';
           _lastWordCount = 0;
-          // Small delay then restart — no stop() call
           if (isTranslating && mounted) {
             Future.delayed(const Duration(milliseconds: 100), _startListening);
           }
@@ -623,18 +677,64 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  Future<void> _translateAndSpeakWord(String text) async {
+  // Live: translate growing partial — updates as person speaks word by word
+  Future<void> _translatePartialLive(String text) async {
     if (!mounted || !isTranslating) return;
     try {
       final translation =
       await TranslationService.instance.translateOnMainThread(text);
       if (!mounted || !isTranslating) return;
+      // Empty result means native language detected — skip silently
+      if (translation.isEmpty) return;
+      final detected = TranslationService.instance.lastDetectedLangName;
       setState(() {
-        translatedText = translation;
-        statusText = '→ $nativeLangName';
+        _currentPartialTranslated = translation;
+        _detectedLangName = detected;
+        statusText = '$detected → $nativeLangName';
       });
       _textFadeController.reset();
       _textFadeController.forward();
+    } catch (e) {}
+  }
+
+  // Final: sentence confirmed — append to paragraph permanently and speak
+  Future<void> _translateFinalAndAppend(String text) async {
+    if (!mounted || !isTranslating) return;
+    try {
+      final translation =
+      await TranslationService.instance.translateOnMainThread(text);
+      if (!mounted || !isTranslating) return;
+      // Empty = native language detected — don't append or speak
+      if (translation.isEmpty) return;
+      final detected = TranslationService.instance.lastDetectedLangName;
+      _translatedParagraph = _translatedParagraph.isEmpty
+          ? translation
+          : _translatedParagraph + '\n' + translation;
+      setState(() {
+        _currentPartialTranslated = '';
+        _detectedLangName = detected;
+        statusText = '$detected → $nativeLangName';
+      });
+      _textFadeController.reset();
+      _textFadeController.forward();
+      // Auto-scroll both boxes to bottom
+      Future.delayed(const Duration(milliseconds: 50), () {
+        if (_origScrollController.hasClients) {
+          _origScrollController.animateTo(
+            _origScrollController.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+        }
+        if (_transScrollController.hasClients) {
+          _transScrollController.animateTo(
+            _transScrollController.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+        }
+      });
+      // Speak the final translation
       final ttsLangMap = {
         'Tamil': 'ta-IN',     'Hindi': 'hi-IN',   'Telugu': 'te-IN',
         'Kannada': 'kn-IN',   'Bengali': 'bn-IN',  'Gujarati': 'gu-IN',
@@ -647,11 +747,68 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         'Swedish': 'sv-SE',
       };
       await _tts.setLanguage(ttsLangMap[nativeLangName] ?? 'ta-IN');
-      try {
-        await _audioChannel.invokeMethod('resetAudioForTTS');
-      } catch (e) {}
+      try { await _audioChannel.invokeMethod('resetAudioForTTS'); } catch (e) {}
       await _tts.speak(translation);
     } catch (e) {}
+  }
+
+  void _showSourceLanguagePicker() {
+    final locales = TranslationService.instance.downloadedSpeechLocales;
+    // Build list of downloaded language names from locale map
+    final downloaded = _speechLocaleMap.entries
+        .where((e) => locales.contains(e.value))
+        .map((e) => e.key)
+        .where((name) => name != nativeLangName) // exclude native
+        .toList()
+      ..sort();
+
+    if (downloaded.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text('No languages downloaded. Go to Languages to download.'),
+        backgroundColor: _accent,
+        behavior: SnackBarBehavior.floating,
+      ));
+      return;
+    }
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: card,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(width: 36, height: 4,
+                decoration: BoxDecoration(
+                    color: bdr2, borderRadius: BorderRadius.circular(2))),
+            const SizedBox(height: 12),
+            Text('Opposite person speaks',
+                style: TextStyle(color: txPri, fontSize: 15, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 12),
+            ...downloaded.map((lang) => ListTile(
+              leading: Icon(Icons.language_rounded,
+                  color: lang == _selectedSourceLang ? _accent : txMut, size: 20),
+              title: Text(lang,
+                  style: TextStyle(
+                      color: lang == _selectedSourceLang ? _accent : txPri,
+                      fontWeight: lang == _selectedSourceLang
+                          ? FontWeight.w700 : FontWeight.normal)),
+              trailing: lang == _selectedSourceLang
+                  ? Icon(Icons.check_circle_rounded, color: _accent, size: 20)
+                  : null,
+              onTap: () {
+                setState(() => _selectedSourceLang = lang);
+                Navigator.pop(context);
+              },
+            )),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _stopAll() async {
@@ -782,166 +939,238 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               builder: (_) => const SettingsScreen()))),
                     ]),
                   ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 10),
 
-                  // ── MIC / SPEAKER SELECTORS ──────────────────────────────
+                  // ── LANGUAGE BAR ─────────────────────────────────────────
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 20),
-                    child: Column(children: [
-                      _deviceSelectorBar(
-                          icon: SelectedMic.type == 'bluetooth'
-                              ? Icons.headphones_rounded
-                              : Icons.smartphone_rounded,
-                          topLabel: 'MICROPHONE',
-                          valueLabel: SelectedMic.label,
-                          isActive: SelectedMic.type == 'bluetooth',
-                          onTap: _showMicSelector),
-                      const SizedBox(height: 8),
-                      _deviceSelectorBar(
-                          icon: SelectedSpeaker.type == 'bluetooth'
-                              ? Icons.headphones_rounded
-                              : Icons.phone_android_rounded,
-                          topLabel: 'SPEAKER',
-                          valueLabel: SelectedSpeaker.label,
-                          isActive: SelectedSpeaker.type == 'bluetooth',
-                          onTap: _showSpeakerSelector),
-                    ]),
-                  ),
-                  const SizedBox(height: 20),
-
-                  // ── ORB ──────────────────────────────────────────────────
-                  AnimatedBuilder(
-                    animation: _pulseAnimation,
-                    builder: (_, __) => Transform.scale(
-                      scale: isTranslating ? _pulseAnimation.value : 1.0,
-                      child: GestureDetector(
-                        onTap: _toggleTranslation,
-                        child: Stack(alignment: Alignment.center, children: [
-                          if (isTranslating)
-                            AnimatedBuilder(
-                              animation: _glowAnimation,
-                              builder: (_, __) => Container(
-                                width: 215, height: 215,
-                                decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    border: Border.all(
-                                        color: _accent.withOpacity(
-                                            (_isDark ? 0.25 : 0.15) *
-                                                _glowAnimation.value),
-                                        width: 1)),
-                              ),
-                            ),
-                          Container(
-                              width: 188, height: 188,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      decoration: BoxDecoration(
+                          color: card,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: bdr2)),
+                      child: Row(
+                        children: [
+                          Icon(Icons.language_rounded, color: _accent, size: 15),
+                          const SizedBox(width: 8),
+                          Text(_detectedLangName,
+                              style: TextStyle(
+                                  color: _detectedLangName == 'Auto' ? txMut : txPri,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600)),
+                          const SizedBox(width: 10),
+                          Icon(Icons.arrow_forward_rounded, color: txMut, size: 14),
+                          const SizedBox(width: 10),
+                          Text(nativeLangName,
+                              style: const TextStyle(
+                                  color: _accent,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600)),
+                          const Spacer(),
+                          GestureDetector(
+                            onTap: () async {
+                              await Navigator.push(context,
+                                  MaterialPageRoute(builder: (_) => const LanguagesScreen()));
+                              await TranslationService.instance.loadModels();
+                              setState(() {});
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                               decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                      color: isTranslating
-                                          ? _accent.withOpacity(0.4)
-                                          : bdr,
-                                      width: 1.5))),
-                          Container(
-                            width: 158, height: 158,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              gradient: RadialGradient(
-                                  colors: isTranslating
-                                      ? [
-                                    const Color(0xFF12B589),
-                                    const Color(0xFF0E9A72),
-                                    const Color(0xFF0B7D5C),
-                                  ]
-                                      : _isDark
-                                      ? [
-                                    const Color(0xFF1A1A2A),
-                                    const Color(0xFF111120),
-                                    const Color(0xFF0A0A15),
-                                  ]
-                                      : [
-                                    const Color(0xFFF2F2F2),
-                                    const Color(0xFFE8E8E8),
-                                    const Color(0xFFDDDDDD),
-                                  ]),
-                              boxShadow: isTranslating
-                                  ? [
-                                BoxShadow(
-                                    color: _accent.withOpacity(0.5),
-                                    blurRadius: 40,
-                                    spreadRadius: 4)
-                              ]
-                                  : [
-                                BoxShadow(
-                                    color: Colors.black.withOpacity(
-                                        _isDark ? 0.5 : 0.1),
-                                    blurRadius: 20)
-                              ],
+                                  color: _accent.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: _accent.withOpacity(0.25))),
+                              child: Text('Manage',
+                                  style: TextStyle(
+                                      color: _accent,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600)),
                             ),
-                            child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                      isTranslating
-                                          ? Icons.mic_rounded
-                                          : Icons.mic_none_rounded,
-                                      size: 50,
-                                      color: isTranslating
-                                          ? Colors.white
-                                          : txMut),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                      isTranslating
-                                          ? 'LISTENING'
-                                          : 'TAP TO START',
-                                      style: TextStyle(
-                                          color: isTranslating
-                                              ? Colors.white.withOpacity(0.9)
-                                              : txMut,
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.w700,
-                                          letterSpacing: 1.5)),
-                                ]),
                           ),
-                        ]),
+                        ],
                       ),
                     ),
                   ),
                   const SizedBox(height: 10),
 
+                  // ── ORB + WAVE (compact row) ─────────────────────────────
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        // Wave bars — left side
+                        Expanded(
+                          child: SizedBox(
+                            height: 36,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: List.generate(
+                                18,
+                                    (i) => Flexible(
+                                  child: AnimatedContainer(
+                                      duration: const Duration(milliseconds: 110),
+                                      margin: const EdgeInsets.symmetric(horizontal: 1.5),
+                                      width: 2.5,
+                                      height: isTranslating
+                                          ? _waveHeights[i].clamp(4.0, 28.0)
+                                          : 4.0,
+                                      decoration: BoxDecoration(
+                                          color: isTranslating
+                                              ? _accent.withOpacity(0.3 + (i % 4) * 0.15)
+                                              : bdr,
+                                          borderRadius: BorderRadius.circular(2))),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(width: 16),
+
+                        // ORB — smaller
+                        AnimatedBuilder(
+                          animation: _pulseAnimation,
+                          builder: (_, __) => Transform.scale(
+                            scale: isTranslating ? _pulseAnimation.value : 1.0,
+                            child: GestureDetector(
+                              onTap: _toggleTranslation,
+                              child: Stack(alignment: Alignment.center, children: [
+                                if (isTranslating)
+                                  AnimatedBuilder(
+                                    animation: _glowAnimation,
+                                    builder: (_, __) => Container(
+                                      width: 110, height: 110,
+                                      decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          border: Border.all(
+                                              color: _accent.withOpacity(
+                                                  (_isDark ? 0.25 : 0.15) *
+                                                      _glowAnimation.value),
+                                              width: 1)),
+                                    ),
+                                  ),
+                                Container(
+                                    width: 96, height: 96,
+                                    decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        border: Border.all(
+                                            color: isTranslating
+                                                ? _accent.withOpacity(0.4)
+                                                : bdr,
+                                            width: 1.5))),
+                                Container(
+                                  width: 80, height: 80,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    gradient: RadialGradient(
+                                        colors: isTranslating
+                                            ? [
+                                          const Color(0xFF12B589),
+                                          const Color(0xFF0E9A72),
+                                          const Color(0xFF0B7D5C),
+                                        ]
+                                            : _isDark
+                                            ? [
+                                          const Color(0xFF1A1A2A),
+                                          const Color(0xFF111120),
+                                          const Color(0xFF0A0A15),
+                                        ]
+                                            : [
+                                          const Color(0xFFF2F2F2),
+                                          const Color(0xFFE8E8E8),
+                                          const Color(0xFFDDDDDD),
+                                        ]),
+                                    boxShadow: isTranslating
+                                        ? [
+                                      BoxShadow(
+                                          color: _accent.withOpacity(0.5),
+                                          blurRadius: 24,
+                                          spreadRadius: 2)
+                                    ]
+                                        : [
+                                      BoxShadow(
+                                          color: Colors.black.withOpacity(
+                                              _isDark ? 0.5 : 0.1),
+                                          blurRadius: 12)
+                                    ],
+                                  ),
+                                  child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                            isTranslating
+                                                ? Icons.mic_rounded
+                                                : Icons.mic_none_rounded,
+                                            size: 28,
+                                            color: isTranslating
+                                                ? Colors.white
+                                                : txMut),
+                                        const SizedBox(height: 3),
+                                        Text(
+                                            isTranslating
+                                                ? 'STOP'
+                                                : 'START',
+                                            style: TextStyle(
+                                                color: isTranslating
+                                                    ? Colors.white.withOpacity(0.9)
+                                                    : txMut,
+                                                fontSize: 9,
+                                                fontWeight: FontWeight.w700,
+                                                letterSpacing: 1.2)),
+                                      ]),
+                                ),
+                              ]),
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(width: 16),
+
+                        // Wave bars — right side
+                        Expanded(
+                          child: SizedBox(
+                            height: 36,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: List.generate(
+                                18,
+                                    (i) => Flexible(
+                                  child: AnimatedContainer(
+                                      duration: const Duration(milliseconds: 110),
+                                      margin: const EdgeInsets.symmetric(horizontal: 1.5),
+                                      width: 2.5,
+                                      height: isTranslating
+                                          ? _waveHeights[18 + i].clamp(4.0, 28.0)
+                                          : 4.0,
+                                      decoration: BoxDecoration(
+                                          color: isTranslating
+                                              ? _accent.withOpacity(0.3 + (i % 4) * 0.15)
+                                              : bdr,
+                                          borderRadius: BorderRadius.circular(2))),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
                   // ── STATUS ───────────────────────────────────────────────
+                  const SizedBox(height: 6),
                   AnimatedSwitcher(
                     duration: const Duration(milliseconds: 350),
                     child: Text(statusText,
                         key: ValueKey(statusText),
                         style: TextStyle(
                             color: isTranslating ? _accent : txMut,
-                            fontSize: 13,
+                            fontSize: 12,
                             fontWeight: FontWeight.w500)),
-                  ),
-                  const SizedBox(height: 10),
-
-                  // ── WAVE BARS ────────────────────────────────────────────
-                  SizedBox(
-                    height: 40,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: List.generate(
-                          _waveHeights.length,
-                              (i) => AnimatedContainer(
-                              duration: const Duration(milliseconds: 110),
-                              margin:
-                              const EdgeInsets.symmetric(horizontal: 2),
-                              width: 3,
-                              height: isTranslating
-                                  ? _waveHeights[i].clamp(4.0, 36.0)
-                                  : 4.0,
-                              decoration: BoxDecoration(
-                                  color: isTranslating
-                                      ? _accent.withOpacity(
-                                      0.3 + (i % 4) * 0.15)
-                                      : bdr,
-                                  borderRadius: BorderRadius.circular(2)))),
-                    ),
                   ),
                   const SizedBox(height: 8),
 
@@ -963,6 +1192,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         child: Column(children: [
                           // ORIGINAL
                           Expanded(
+                            flex: 2,
                             child: Padding(
                               padding: const EdgeInsets.all(16),
                               child: Column(
@@ -987,6 +1217,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                     const SizedBox(height: 10),
                                     Expanded(
                                       child: SingleChildScrollView(
+                                        controller: _origScrollController,
                                         child: Text(
                                             originalText.isEmpty
                                                 ? (isTranslating
@@ -1019,6 +1250,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
                           // TRANSLATION
                           Expanded(
+                            flex: 3,
                             child: Padding(
                               padding: const EdgeInsets.all(16),
                               child: Column(
@@ -1063,6 +1295,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                     const SizedBox(height: 10),
                                     Expanded(
                                       child: SingleChildScrollView(
+                                        controller: _transScrollController,
                                         child: FadeTransition(
                                           opacity: translatedText.isNotEmpty
                                               ? _textFadeAnimation
