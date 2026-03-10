@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'home_screen.dart';
+import 'app_theme.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key});
@@ -18,6 +20,7 @@ class _AuthScreenState extends State<AuthScreen>
   final _nameController = TextEditingController();
   bool _obscurePassword = true;
   bool _isLoading = false;
+  late AppTheme _t;
 
   late AnimationController _fadeController;
   late Animation<double> _fadeAnimation;
@@ -25,6 +28,9 @@ class _AuthScreenState extends State<AuthScreen>
   @override
   void initState() {
     super.initState();
+    _t = const AppTheme(true); // default until prefs load
+    _loadTheme();
+
     _fadeController = AnimationController(
       duration: const Duration(milliseconds: 700),
       vsync: this,
@@ -33,6 +39,21 @@ class _AuthScreenState extends State<AuthScreen>
       CurvedAnimation(parent: _fadeController, curve: Curves.easeOut),
     );
     _fadeController.forward();
+  }
+
+  Future<void> _loadTheme() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedMode = prefs.getString('theme_mode') ?? 'dark';
+    final isDark = _resolvedIsDark(savedMode);
+    if (mounted) setState(() => _t = AppTheme(isDark));
+  }
+
+  bool _resolvedIsDark(String mode) {
+    if (mode == 'light') return false;
+    if (mode == 'dark') return true;
+    final brightness =
+        WidgetsBinding.instance.platformDispatcher.platformBrightness;
+    return brightness == Brightness.dark;
   }
 
   @override
@@ -94,10 +115,7 @@ class _AuthScreenState extends State<AuthScreen>
     setState(() => _isLoading = true);
     try {
       final GoogleSignIn googleSignIn = GoogleSignIn();
-
-      // Force sign out first so account picker always shows
       await googleSignIn.signOut();
-
       final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
       if (googleUser == null) {
         setState(() => _isLoading = false);
@@ -141,7 +159,7 @@ class _AuthScreenState extends State<AuthScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0A0A0F),
+      backgroundColor: _t.bg,
       body: FadeTransition(
         opacity: _fadeAnimation,
         child: SafeArea(
@@ -152,7 +170,7 @@ class _AuthScreenState extends State<AuthScreen>
               children: [
                 const SizedBox(height: 48),
 
-                // Logo + Title
+                // ── Logo + Title ────────────────────────────────────────────
                 Center(
                   child: Column(
                     children: [
@@ -160,8 +178,7 @@ class _AuthScreenState extends State<AuthScreen>
                         alignment: Alignment.center,
                         children: [
                           Container(
-                            width: 110,
-                            height: 110,
+                            width: 110, height: 110,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
                               boxShadow: [
@@ -174,8 +191,7 @@ class _AuthScreenState extends State<AuthScreen>
                             ),
                           ),
                           Container(
-                            width: 80,
-                            height: 80,
+                            width: 80, height: 80,
                             decoration: BoxDecoration(
                               color: const Color(0xFF10A37F).withOpacity(0.1),
                               borderRadius: BorderRadius.circular(24),
@@ -190,19 +206,19 @@ class _AuthScreenState extends State<AuthScreen>
                         ],
                       ),
                       const SizedBox(height: 20),
-                      const Text(
+                      Text(
                         'TranslateAR',
                         style: TextStyle(
-                          color: Colors.white,
+                          color: _t.txPri,
                           fontSize: 32,
                           fontWeight: FontWeight.w800,
                           letterSpacing: -1,
                         ),
                       ),
                       const SizedBox(height: 6),
-                      const Text(
+                      Text(
                         'Real-time translation in your ears',
-                        style: TextStyle(color: Color(0xFF555570), fontSize: 14),
+                        style: TextStyle(color: _t.txSec, fontSize: 14),
                       ),
                     ],
                   ),
@@ -210,25 +226,24 @@ class _AuthScreenState extends State<AuthScreen>
 
                 const SizedBox(height: 40),
 
-                // Toggle Sign In / Register
+                // ── Toggle Sign In / Register ───────────────────────────────
                 Container(
                   padding: const EdgeInsets.all(4),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF0F0F1A),
+                    color: _t.bar,
                     borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: const Color(0xFF1E1E2E)),
+                    border: Border.all(color: _t.bdr),
+                    boxShadow: _t.cardShadow,
                   ),
-                  child: Row(
-                    children: [
-                      Expanded(child: _toggleBtn('Sign In', true)),
-                      Expanded(child: _toggleBtn('Register', false)),
-                    ],
-                  ),
+                  child: Row(children: [
+                    Expanded(child: _toggleBtn('Sign In', true)),
+                    Expanded(child: _toggleBtn('Register', false)),
+                  ]),
                 ),
 
                 const SizedBox(height: 28),
 
-                // Name field (register only)
+                // ── Name field (register only) ──────────────────────────────
                 if (!isLogin) ...[
                   _label('Full Name'),
                   const SizedBox(height: 8),
@@ -240,7 +255,7 @@ class _AuthScreenState extends State<AuthScreen>
                   const SizedBox(height: 18),
                 ],
 
-                // Email
+                // ── Email ───────────────────────────────────────────────────
                 _label('Email'),
                 const SizedBox(height: 8),
                 _field(
@@ -252,7 +267,7 @@ class _AuthScreenState extends State<AuthScreen>
 
                 const SizedBox(height: 18),
 
-                // Password
+                // ── Password ────────────────────────────────────────────────
                 _label('Password'),
                 const SizedBox(height: 8),
                 _field(
@@ -269,7 +284,7 @@ class _AuthScreenState extends State<AuthScreen>
                         _obscurePassword
                             ? Icons.visibility_off_outlined
                             : Icons.visibility_outlined,
-                        color: const Color(0xFF555570),
+                        color: _t.txSec,
                         size: 18,
                       ),
                     ),
@@ -278,7 +293,7 @@ class _AuthScreenState extends State<AuthScreen>
 
                 const SizedBox(height: 28),
 
-                // Main button
+                // ── Sign In / Create Account button ─────────────────────────
                 GestureDetector(
                   onTap: _isLoading ? null : _handleEmailAuth,
                   child: Container(
@@ -302,8 +317,7 @@ class _AuthScreenState extends State<AuthScreen>
                     child: Center(
                       child: _isLoading
                           ? const SizedBox(
-                        width: 22,
-                        height: 22,
+                        width: 22, height: 22,
                         child: CircularProgressIndicator(
                             color: Colors.white, strokeWidth: 2.5),
                       )
@@ -321,37 +335,35 @@ class _AuthScreenState extends State<AuthScreen>
 
                 const SizedBox(height: 22),
 
-                // OR divider
-                Row(
-                  children: [
-                    Expanded(child: Container(height: 1, color: const Color(0xFF1E1E2E))),
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 16),
-                      child: Text('or', style: TextStyle(color: Color(0xFF555570))),
-                    ),
-                    Expanded(child: Container(height: 1, color: const Color(0xFF1E1E2E))),
-                  ],
-                ),
+                // ── OR divider ──────────────────────────────────────────────
+                Row(children: [
+                  Expanded(child: Container(height: 1, color: _t.bdr)),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Text('or', style: TextStyle(color: _t.txSec)),
+                  ),
+                  Expanded(child: Container(height: 1, color: _t.bdr)),
+                ]),
 
                 const SizedBox(height: 22),
 
-                // Google button
+                // ── Google button ───────────────────────────────────────────
                 GestureDetector(
                   onTap: _isLoading ? null : _handleGoogleSignIn,
                   child: Container(
                     width: double.infinity,
                     height: 54,
                     decoration: BoxDecoration(
-                      color: const Color(0xFF0F0F1A),
+                      color: _t.bar,
                       borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: const Color(0xFF2A2A40), width: 1.5),
+                      border: Border.all(color: _t.bdr, width: 1.5),
+                      boxShadow: _t.cardShadow,
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Container(
-                          width: 28,
-                          height: 28,
+                          width: 28, height: 28,
                           decoration: BoxDecoration(
                             color: const Color(0xFF10A37F).withOpacity(0.1),
                             shape: BoxShape.circle,
@@ -360,10 +372,10 @@ class _AuthScreenState extends State<AuthScreen>
                               color: Color(0xFF10A37F), size: 22),
                         ),
                         const SizedBox(width: 10),
-                        const Text(
+                        Text(
                           'Continue with Google',
                           style: TextStyle(
-                            color: Colors.white,
+                            color: _t.txPri,
                             fontSize: 15,
                             fontWeight: FontWeight.w500,
                           ),
@@ -382,6 +394,8 @@ class _AuthScreenState extends State<AuthScreen>
     );
   }
 
+  // ── Helpers ──────────────────────────────────────────────────────────────────
+
   Widget _toggleBtn(String label, bool login) {
     final isActive = isLogin == login;
     return GestureDetector(
@@ -397,7 +411,7 @@ class _AuthScreenState extends State<AuthScreen>
           label,
           textAlign: TextAlign.center,
           style: TextStyle(
-            color: isActive ? Colors.white : const Color(0xFF555570),
+            color: isActive ? Colors.white : _t.txSec,
             fontWeight: FontWeight.w600,
             fontSize: 14,
           ),
@@ -408,8 +422,8 @@ class _AuthScreenState extends State<AuthScreen>
 
   Widget _label(String text) => Text(
     text,
-    style: const TextStyle(
-      color: Color(0xFF8888A8),
+    style: TextStyle(
+      color: _t.txSec,
       fontSize: 13,
       fontWeight: FontWeight.w500,
     ),
@@ -425,34 +439,33 @@ class _AuthScreenState extends State<AuthScreen>
   }) {
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF0F0F1A),
+        color: _t.bar,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF1E1E2E)),
+        border: Border.all(color: _t.bdr),
+        boxShadow: _t.cardShadow,
       ),
-      child: Row(
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(left: 14),
-            child: Icon(icon, color: const Color(0xFF555570), size: 20),
-          ),
-          Expanded(
-            child: TextField(
-              controller: controller,
-              obscureText: obscure,
-              keyboardType: keyboardType,
-              style: const TextStyle(color: Colors.white, fontSize: 15),
-              decoration: InputDecoration(
-                hintText: hint,
-                hintStyle: const TextStyle(color: Color(0xFF333350), fontSize: 15),
-                border: InputBorder.none,
-                contentPadding:
-                const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
-              ),
+      child: Row(children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 14),
+          child: Icon(icon, color: _t.txSec, size: 20),
+        ),
+        Expanded(
+          child: TextField(
+            controller: controller,
+            obscureText: obscure,
+            keyboardType: keyboardType,
+            style: TextStyle(color: _t.txPri, fontSize: 15),
+            decoration: InputDecoration(
+              hintText: hint,
+              hintStyle: TextStyle(color: _t.txMut, fontSize: 15),
+              border: InputBorder.none,
+              contentPadding:
+              const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
             ),
           ),
-          if (suffix != null) suffix,
-        ],
-      ),
+        ),
+        if (suffix != null) suffix,
+      ]),
     );
   }
 }

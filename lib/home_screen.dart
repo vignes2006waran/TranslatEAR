@@ -13,6 +13,7 @@ import 'sound_manager.dart';
 import 'earbud_screen.dart';
 import 'translation_service.dart';
 import 'languages_screen.dart';
+import 'app_theme.dart';
 import 'package:google_mlkit_translation/google_mlkit_translation.dart';
 
 const _audioChannel = MethodChannel('audio_config');
@@ -40,6 +41,8 @@ class TranslationHistory {
   }
 }
 
+const _accent = Color(0xFF10A37F);
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
   @override
@@ -53,18 +56,39 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   String translatedText = '';
   int _currentNavIndex = 0;
 
+  // ── Theme ─────────────────────────────────────────────────────────────────
+  late AppTheme _t;
+  bool get _isDark => _t.isDark;
+
+  // Convenience getters so existing widget code needs no changes
+  Color get bg      => _t.bg;
+  Color get card    => _t.card;
+  Color get bar     => _t.bar;
+  Color get bdr     => _t.bdr;
+  Color get bdr2    => _t.bdr2;
+  Color get bdr3    => _t.bdr3;
+  Color get txPri   => _t.txPri;
+  Color get txMut   => _t.txMut;
+  Color get txDead  => _t.txDead;
+  Color get txDd2   => _t.txDd2;
+  Color get navDead => _t.txNav;
+
+  // ── Speech / TTS ──────────────────────────────────────────────────────────
   final SpeechToText _speech = SpeechToText();
   final FlutterTts _tts = FlutterTts();
   bool _speechAvailable = false;
 
   String _lastSubmitted = '';
   String _currentPartial = '';
-  String _lastTranslatedWord = '';
+  String _lastTranslatedText = '';  // tracks what we already translated
+  int _lastWordCount = 0;           // tracks word count of last translation
+  Timer? _wordDebounce;             // small debounce so we don't fire on every character
   Timer? _silenceTimer;
 
   final List<Map<String, String>> _sessionConversations = [];
   DateTime? _sessionStart;
 
+  // ── Animations ────────────────────────────────────────────────────────────
   late AnimationController _pulseController;
   late AnimationController _glowController;
   late AnimationController _textFadeController;
@@ -75,15 +99,47 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   final List<double> _waveHeights = List.filled(28, 0.0);
   final Random _random = Random();
 
-  String get nativeLangName => TranslationService.instance.currentTargetLangName;
+  String get nativeLangName =>
+      TranslationService.instance.currentTargetLangName;
 
   @override
   void initState() {
     super.initState();
+    _t = const AppTheme(true); // default until prefs load
     _initAnimations();
     _initSpeech();
     _loadAndApplyNativeLanguage();
+    _loadTheme();
   }
+
+  // ── Theme loading ─────────────────────────────────────────────────────────
+
+  Future<void> _loadTheme() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedMode = prefs.getString('theme_mode') ?? 'dark';
+    final isDark = _resolvedIsDark(savedMode);
+    if (mounted) setState(() => _t = AppTheme(isDark));
+  }
+
+  bool _resolvedIsDark(String mode) {
+    if (mode == 'light') return false;
+    if (mode == 'dark') return true;
+    final brightness =
+        WidgetsBinding.instance.platformDispatcher.platformBrightness;
+    return brightness == Brightness.dark;
+  }
+
+  /// Called by the toggle button in the top bar.
+  /// Flips theme AND writes both keys for full compatibility.
+  Future<void> _toggleTheme() async {
+    final newDark = !_isDark;
+    setState(() => _t = AppTheme(newDark));
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('theme_mode', newDark ? 'dark' : 'light');
+    await prefs.setBool('is_dark_mode', newDark);
+  }
+
+  // ── Language / TTS ────────────────────────────────────────────────────────
 
   Future<void> _loadAndApplyNativeLanguage() async {
     final prefs = await SharedPreferences.getInstance();
@@ -139,20 +195,35 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Future<void> _initSpeech() async {
     await Permission.microphone.request();
     _speechAvailable = await _speech.initialize(
-        onError: (e) => debugPrint('Speech error: $e'));
+      onError: (e) {
+        debugPrint('Speech error: $e');
+        if (mounted && isTranslating) {
+          Future.delayed(const Duration(milliseconds: 500), _startListening);
+        }
+      },
+      onStatus: (status) {
+        debugPrint('Speech status: $status');
+        // If speech stops unexpectedly while we're still translating, restart
+        if (status == 'done' || status == 'notListening') {
+          if (mounted && isTranslating) {
+            Future.delayed(const Duration(milliseconds: 100), _startListening);
+          }
+        }
+      },
+    );
     if (mounted) setState(() {});
   }
 
   Future<void> _initTts() async {
     final ttsLangMap = {
-      'Tamil': 'ta-IN', 'Hindi': 'hi-IN', 'Telugu': 'te-IN',
-      'Kannada': 'kn-IN', 'Bengali': 'bn-IN', 'Gujarati': 'gu-IN',
-      'Marathi': 'mr-IN', 'Urdu': 'ur-PK', 'Arabic': 'ar-SA',
-      'French': 'fr-FR', 'German': 'de-DE', 'Spanish': 'es-ES',
-      'Italian': 'it-IT', 'Portuguese': 'pt-BR', 'Russian': 'ru-RU',
-      'Japanese': 'ja-JP', 'Korean': 'ko-KR', 'Chinese': 'zh-CN',
-      'Thai': 'th-TH', 'Vietnamese': 'vi-VN', 'Indonesian': 'id-ID',
-      'Turkish': 'tr-TR', 'Dutch': 'nl-NL', 'Polish': 'pl-PL',
+      'Tamil': 'ta-IN',     'Hindi': 'hi-IN',   'Telugu': 'te-IN',
+      'Kannada': 'kn-IN',   'Bengali': 'bn-IN',  'Gujarati': 'gu-IN',
+      'Marathi': 'mr-IN',   'Urdu': 'ur-PK',     'Arabic': 'ar-SA',
+      'French': 'fr-FR',    'German': 'de-DE',   'Spanish': 'es-ES',
+      'Italian': 'it-IT',   'Portuguese': 'pt-BR','Russian': 'ru-RU',
+      'Japanese': 'ja-JP',  'Korean': 'ko-KR',   'Chinese': 'zh-CN',
+      'Thai': 'th-TH',      'Vietnamese': 'vi-VN','Indonesian': 'id-ID',
+      'Turkish': 'tr-TR',   'Dutch': 'nl-NL',    'Polish': 'pl-PL',
       'Swedish': 'sv-SE',
     };
     final ttsLang = ttsLangMap[nativeLangName] ?? 'ta-IN';
@@ -174,18 +245,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     super.dispose();
   }
 
+  // ── Audio routing ─────────────────────────────────────────────────────────
+
   Future<void> _applyMicSelection() async {
     try {
       await _audioChannel.invokeMethod('setMic', {'type': SelectedMic.type});
-      await _audioChannel.invokeMethod('setSpeaker', {'type': SelectedSpeaker.type});
+      await _audioChannel.invokeMethod(
+          'setSpeaker', {'type': SelectedSpeaker.type});
     } catch (e) {}
   }
 
   Future<void> _applySpeakerSelection() async {
     try {
-      await _audioChannel.invokeMethod('setSpeaker', {'type': SelectedSpeaker.type});
+      await _audioChannel.invokeMethod(
+          'setSpeaker', {'type': SelectedSpeaker.type});
     } catch (e) {}
   }
+
+  // ── Selector sheets ───────────────────────────────────────────────────────
 
   void _showMicSelector() {
     showModalBottomSheet(
@@ -271,46 +348,67 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     required VoidCallback onSelectBt,
   }) {
     return Container(
-      decoration: const BoxDecoration(
-        color: Color(0xFF0F0F1A),
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      decoration: BoxDecoration(
+        color: bar,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
         border: Border(
-          top: BorderSide(color: Color(0xFF1E1E2E)),
-          left: BorderSide(color: Color(0xFF1E1E2E)),
-          right: BorderSide(color: Color(0xFF1E1E2E)),
+          top:   BorderSide(color: bdr),
+          left:  BorderSide(color: bdr),
+          right: BorderSide(color: bdr),
         ),
       ),
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 36),
-      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Center(child: Container(width: 36, height: 4,
-            decoration: BoxDecoration(color: const Color(0xFF2A2A3A), borderRadius: BorderRadius.circular(2)))),
-        const SizedBox(height: 20),
-        Row(children: [
-          Icon(icon, color: const Color(0xFF10A37F), size: 18),
-          const SizedBox(width: 8),
-          Text(title, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
-        ]),
-        const SizedBox(height: 4),
-        Text(subtitle, style: const TextStyle(color: Color(0xFF444460), fontSize: 12)),
-        const SizedBox(height: 20),
-        _selectorOption(
-            icon: phoneIcon, title: phoneLabel, subtitle: phoneSubtitle,
-            isSelected: selectedType == 'phone', onTap: onSelectPhone),
-        const SizedBox(height: 10),
-        if (ConnectedEarbud.name != null)
-          _selectorOption(
-              icon: btIcon, title: ConnectedEarbud.name!,
-              subtitle: ConnectedEarbud.address ?? 'Bluetooth device',
-              isSelected: selectedType == 'bluetooth', onTap: onSelectBt, isBluetooth: true)
-        else
-          _noBluetoothTile(ctx),
-      ]),
+      child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                  width: 36, height: 4,
+                  decoration: BoxDecoration(
+                      color: bdr3, borderRadius: BorderRadius.circular(2))),
+            ),
+            const SizedBox(height: 20),
+            Row(children: [
+              Icon(icon, color: _accent, size: 18),
+              const SizedBox(width: 8),
+              Text(title,
+                  style: TextStyle(
+                      color: txPri,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700)),
+            ]),
+            const SizedBox(height: 4),
+            Text(subtitle, style: TextStyle(color: txMut, fontSize: 12)),
+            const SizedBox(height: 20),
+            _selectorOption(
+                icon: phoneIcon,
+                title: phoneLabel,
+                subtitle: phoneSubtitle,
+                isSelected: selectedType == 'phone',
+                onTap: onSelectPhone),
+            const SizedBox(height: 10),
+            if (ConnectedEarbud.name != null)
+              _selectorOption(
+                  icon: btIcon,
+                  title: ConnectedEarbud.name!,
+                  subtitle: ConnectedEarbud.address ?? 'Bluetooth device',
+                  isSelected: selectedType == 'bluetooth',
+                  onTap: onSelectBt,
+                  isBluetooth: true)
+            else
+              _noBluetoothTile(ctx),
+          ]),
     );
   }
 
   Widget _selectorOption({
-    required IconData icon, required String title, required String subtitle,
-    required bool isSelected, required VoidCallback onTap, bool isBluetooth = false,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required bool isSelected,
+    required VoidCallback onTap,
+    bool isBluetooth = false,
   }) {
     return GestureDetector(
       onTap: onTap,
@@ -318,40 +416,48 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF10A37F).withOpacity(0.08) : const Color(0xFF0C0C18),
+          color: isSelected ? _accent.withOpacity(0.08) : card,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-              color: isSelected ? const Color(0xFF10A37F).withOpacity(0.4) : const Color(0xFF1A1A2A),
+              color: isSelected ? _accent.withOpacity(0.4) : bdr3,
               width: isSelected ? 1.5 : 1),
         ),
         child: Row(children: [
-          Container(width: 42, height: 42,
+          Container(
+              width: 42, height: 42,
               decoration: BoxDecoration(
-                  color: isSelected ? const Color(0xFF10A37F).withOpacity(0.15) : const Color(0xFF1A1A2A),
+                  color: isSelected ? _accent.withOpacity(0.15) : _t.iconBg,
                   borderRadius: BorderRadius.circular(12)),
               child: Icon(icon,
-                  color: isSelected ? const Color(0xFF10A37F) : const Color(0xFF444460), size: 20)),
+                  color: isSelected ? _accent : txMut, size: 20)),
           const SizedBox(width: 12),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(title, style: TextStyle(
-                color: isSelected ? Colors.white : const Color(0xFF888899),
-                fontSize: 14, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 2),
-            Text(subtitle,
-                style: const TextStyle(color: Color(0xFF444460), fontSize: 11),
-                overflow: TextOverflow.ellipsis),
-          ])),
+          Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: TextStyle(
+                            color: isSelected ? txPri : txMut,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 2),
+                    Text(subtitle,
+                        style: TextStyle(color: txMut, fontSize: 11),
+                        overflow: TextOverflow.ellipsis),
+                  ])),
           const SizedBox(width: 8),
           AnimatedContainer(
               duration: const Duration(milliseconds: 200),
               width: 20, height: 20,
               decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: isSelected ? const Color(0xFF10A37F) : Colors.transparent,
+                  color: isSelected ? _accent : Colors.transparent,
                   border: Border.all(
-                      color: isSelected ? const Color(0xFF10A37F) : const Color(0xFF2A2A3A),
-                      width: 1.5)),
-              child: isSelected ? const Icon(Icons.check_rounded, color: Colors.white, size: 12) : null),
+                      color: isSelected ? _accent : bdr3, width: 1.5)),
+              child: isSelected
+                  ? const Icon(Icons.check_rounded,
+                  color: Colors.white, size: 12)
+                  : null),
         ]),
       ),
     );
@@ -361,38 +467,48 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-          color: const Color(0xFF0C0C18),
+          color: card,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: const Color(0xFF1A1A2A))),
+          border: Border.all(color: bdr3)),
       child: Row(children: [
-        Container(width: 42, height: 42,
-            decoration: BoxDecoration(color: const Color(0xFF1A1A2A), borderRadius: BorderRadius.circular(12)),
-            child: const Icon(Icons.headphones_rounded, color: Color(0xFF2A2A3A), size: 20)),
+        Container(
+            width: 42, height: 42,
+            decoration: BoxDecoration(
+                color: _t.iconBg, borderRadius: BorderRadius.circular(12)),
+            child: Icon(Icons.headphones_rounded, color: txDead, size: 20)),
         const SizedBox(width: 12),
-        const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('No Bluetooth Device',
-              style: TextStyle(color: Color(0xFF2A2A3A), fontSize: 14, fontWeight: FontWeight.w600)),
-          SizedBox(height: 2),
-          Text('Connect earbuds to see them here',
-              style: TextStyle(color: Color(0xFF1E1E2E), fontSize: 11)),
-        ])),
+        Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('No Bluetooth Device',
+                  style: TextStyle(
+                      color: txDead, fontSize: 14, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 2),
+              Text('Connect earbuds to see them here',
+                  style: TextStyle(color: txDead, fontSize: 11)),
+            ])),
         GestureDetector(
           onTap: () {
             Navigator.pop(ctx);
-            Navigator.push(context, MaterialPageRoute(builder: (_) => const EarbudScreen()));
+            Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const EarbudScreen()));
           },
           child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
-                  color: const Color(0xFF10A37F).withOpacity(0.1),
+                  color: _accent.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: const Color(0xFF10A37F).withOpacity(0.2))),
+                  border: Border.all(color: _accent.withOpacity(0.2))),
               child: const Text('Connect',
-                  style: TextStyle(color: Color(0xFF10A37F), fontSize: 11, fontWeight: FontWeight.w600))),
+                  style: TextStyle(
+                      color: _accent,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600))),
         ),
       ]),
     );
   }
+
+  // ── Translation logic ─────────────────────────────────────────────────────
 
   void _toggleTranslation() {
     if (!mounted) return;
@@ -422,9 +538,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _glowController.reset();
         for (int i = 0; i < _waveHeights.length; i++) _waveHeights[i] = 0.0;
       });
-      _stopAll().then((_) {
-        SoundManager.playStopTune();
-      });
+      _stopAll().then((_) => SoundManager.playStopTune());
       _saveSession();
     }
   }
@@ -441,69 +555,72 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Future<void> _startListening() async {
     if (!isTranslating || !mounted) return;
-    try {
-      await _speech.cancel();
-      await _speech.stop();
-    } catch (e) {}
-    await Future.delayed(const Duration(milliseconds: 400));
-    if (!isTranslating || !mounted) return;
 
-    _speechAvailable = await _speech.initialize(
-      onError: (e) {
-        if (mounted && isTranslating) {
-          Future.delayed(const Duration(seconds: 1), () {
-            if (mounted && isTranslating) _startListening();
-          });
-        }
-      },
-    );
+    if (!_speechAvailable) {
+      _speechAvailable = await _speech.initialize(
+        onError: (e) => debugPrint('Speech init error: $e'),
+      );
+    }
     if (!_speechAvailable || !isTranslating || !mounted) return;
 
     _lastSubmitted = '';
     _currentPartial = '';
-    _lastTranslatedWord = '';
+    _lastTranslatedText = '';
+    _lastWordCount = 0;
 
-    await _speech.listen(
+    _speech.listen(
       onResult: (result) {
         if (!mounted || !isTranslating) return;
         final words = result.recognizedWords.trim();
         if (words.isEmpty) return;
 
-        // Show full detected text on screen
         setState(() => originalText = words);
         _currentPartial = words;
 
-        // Only translate on FINAL result — full sentence accuracy
+        final currentWordCount = words.split(' ').length;
+        if (currentWordCount > _lastWordCount) {
+          _lastWordCount = currentWordCount;
+          _wordDebounce?.cancel();
+          _wordDebounce = Timer(const Duration(milliseconds: 200), () {
+            if (!mounted || !isTranslating) return;
+            if (_currentPartial != _lastTranslatedText && _currentPartial.isNotEmpty) {
+              _lastTranslatedText = _currentPartial;
+              _translateAndSpeakWord(_currentPartial);
+            }
+          });
+        }
+
         if (result.finalResult) {
-          if (words != _lastSubmitted) {
+          _wordDebounce?.cancel();
+          if (words != _lastSubmitted && words.length > 1) {
             _lastSubmitted = words;
-            _translateAndSpeakWord(words); // translate FULL sentence
+            _translateAndSpeakWord(words);
             _sessionConversations.add({
               'original': words,
               'translated': translatedText,
             });
           }
+          _currentPartial = '';
+          _lastTranslatedText = '';
+          _lastWordCount = 0;
+          // Small delay then restart — no stop() call
+          if (isTranslating && mounted) {
+            Future.delayed(const Duration(milliseconds: 100), _startListening);
+          }
         }
       },
-      listenFor: const Duration(seconds: 60),
+      onSoundLevelChange: null,
+      listenFor: const Duration(seconds: 30),
       pauseFor: const Duration(seconds: 3),
       listenOptions: SpeechListenOptions(
         partialResults: true,
         cancelOnError: false,
-        autoPunctuation: true,
+        autoPunctuation: false,
         enableHapticFeedback: false,
+        onDevice: false,
       ),
-      localeId: 'en-US',
+      localeId: 'en-IN',
     );
-
-    _speech.statusListener = (status) {
-      if (!mounted || !isTranslating) return;
-      if (status == 'done' || status == 'notListening') {
-        Future.delayed(const Duration(milliseconds: 300), () {
-          if (mounted && isTranslating) _startListening();
-        });
-      }
-    };
   }
 
   Future<void> _translateAndSpeakWord(String text) async {
@@ -519,25 +636,29 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       _textFadeController.reset();
       _textFadeController.forward();
       final ttsLangMap = {
-        'Tamil': 'ta-IN', 'Hindi': 'hi-IN', 'Telugu': 'te-IN',
-        'Kannada': 'kn-IN', 'Bengali': 'bn-IN', 'Gujarati': 'gu-IN',
-        'Marathi': 'mr-IN', 'Urdu': 'ur-PK', 'Arabic': 'ar-SA',
-        'French': 'fr-FR', 'German': 'de-DE', 'Spanish': 'es-ES',
-        'Italian': 'it-IT', 'Portuguese': 'pt-BR', 'Russian': 'ru-RU',
-        'Japanese': 'ja-JP', 'Korean': 'ko-KR', 'Chinese': 'zh-CN',
-        'Thai': 'th-TH', 'Vietnamese': 'vi-VN', 'Indonesian': 'id-ID',
-        'Turkish': 'tr-TR', 'Dutch': 'nl-NL', 'Polish': 'pl-PL',
+        'Tamil': 'ta-IN',     'Hindi': 'hi-IN',   'Telugu': 'te-IN',
+        'Kannada': 'kn-IN',   'Bengali': 'bn-IN',  'Gujarati': 'gu-IN',
+        'Marathi': 'mr-IN',   'Urdu': 'ur-PK',     'Arabic': 'ar-SA',
+        'French': 'fr-FR',    'German': 'de-DE',   'Spanish': 'es-ES',
+        'Italian': 'it-IT',   'Portuguese': 'pt-BR','Russian': 'ru-RU',
+        'Japanese': 'ja-JP',  'Korean': 'ko-KR',   'Chinese': 'zh-CN',
+        'Thai': 'th-TH',      'Vietnamese': 'vi-VN','Indonesian': 'id-ID',
+        'Turkish': 'tr-TR',   'Dutch': 'nl-NL',    'Polish': 'pl-PL',
         'Swedish': 'sv-SE',
       };
       await _tts.setLanguage(ttsLangMap[nativeLangName] ?? 'ta-IN');
+      try {
+        await _audioChannel.invokeMethod('resetAudioForTTS');
+      } catch (e) {}
       await _tts.speak(translation);
     } catch (e) {}
   }
 
   Future<void> _stopAll() async {
     _silenceTimer?.cancel();
+    _wordDebounce?.cancel();
     _speech.statusListener = null;
-    try { await _speech.stop(); } catch (e) {}
+    _speech.stop();
     try { await _tts.stop(); } catch (e) {}
   }
 
@@ -555,8 +676,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         : (now.day == yesterday.day && now.month == yesterday.month)
         ? 'Yesterday'
         : '${now.day}/${now.month}/${now.year}';
-    final allText = _sessionConversations.map((c) => c['original'] ?? '').join('. ');
-    final summary = allText.length > 80 ? '${allText.substring(0, 80)}...' : allText;
+    final allText =
+    _sessionConversations.map((c) => c['original'] ?? '').join('. ');
+    final summary =
+    allText.length > 80 ? '${allText.substring(0, 80)}...' : allText;
     TranslationHistory.addSession({
       'date': dateStr,
       'time': '$h12:$m $period',
@@ -567,125 +690,192 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     });
   }
 
+  // ── Build ─────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF0A0A0F),
-      body: Stack(
-        children: [
-          if (isTranslating)
-            AnimatedBuilder(
-              animation: _glowAnimation,
-              builder: (_, __) => Positioned(
-                top: -80,
-                left: MediaQuery.of(context).size.width / 2 - 130,
-                child: Container(
-                  width: 260, height: 260,
-                  decoration: BoxDecoration(shape: BoxShape.circle, boxShadow: [
-                    BoxShadow(
-                        color: const Color(0xFF10A37F)
-                            .withOpacity(0.12 * _glowAnimation.value),
-                        blurRadius: 120, spreadRadius: 60),
-                  ]),
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
+      color: bg,
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: Stack(
+          children: [
+            // Glow effect
+            if (isTranslating)
+              AnimatedBuilder(
+                animation: _glowAnimation,
+                builder: (_, __) => Positioned(
+                  top: -80,
+                  left: MediaQuery.of(context).size.width / 2 - 130,
+                  child: Container(
+                    width: 260, height: 260,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                            color: _accent.withOpacity(
+                                (_isDark ? 0.12 : 0.07) *
+                                    _glowAnimation.value),
+                            blurRadius: 120,
+                            spreadRadius: 60),
+                      ],
+                    ),
+                  ),
                 ),
               ),
-            ),
-          SafeArea(
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
-                  child: Row(children: [
-                    Container(
-                        width: 36, height: 36,
-                        decoration: BoxDecoration(
-                            color: const Color(0xFF10A37F).withOpacity(0.12),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(
-                                color: const Color(0xFF10A37F).withOpacity(0.25))),
-                        child: const Icon(Icons.translate,
-                            color: Color(0xFF10A37F), size: 18)),
-                    const SizedBox(width: 10),
-                    const Text('TranslateAR',
-                        style: TextStyle(color: Colors.white, fontSize: 19,
-                            fontWeight: FontWeight.w700, letterSpacing: -0.5)),
-                    const Spacer(),
-                    _topBtn(Icons.history_rounded, () => Navigator.push(
-                        context, MaterialPageRoute(builder: (_) => const HistoryScreen()))),
-                    const SizedBox(width: 8),
-                    _topBtn(Icons.settings_rounded, () => Navigator.push(
-                        context, MaterialPageRoute(builder: (_) => const SettingsScreen()))),
-                  ]),
-                ),
-                const SizedBox(height: 14),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: Column(children: [
-                    _deviceSelectorBar(
-                        icon: SelectedMic.type == 'bluetooth'
-                            ? Icons.headphones_rounded : Icons.smartphone_rounded,
-                        topLabel: 'MICROPHONE',
-                        valueLabel: SelectedMic.label,
-                        isActive: SelectedMic.type == 'bluetooth',
-                        onTap: _showMicSelector),
-                    const SizedBox(height: 8),
-                    _deviceSelectorBar(
-                        icon: SelectedSpeaker.type == 'bluetooth'
-                            ? Icons.headphones_rounded : Icons.phone_android_rounded,
-                        topLabel: 'SPEAKER',
-                        valueLabel: SelectedSpeaker.label,
-                        isActive: SelectedSpeaker.type == 'bluetooth',
-                        onTap: _showSpeakerSelector),
-                  ]),
-                ),
-                const SizedBox(height: 20),
-                AnimatedBuilder(
-                  animation: _pulseAnimation,
-                  builder: (_, __) => Transform.scale(
-                    scale: isTranslating ? _pulseAnimation.value : 1.0,
-                    child: GestureDetector(
-                      onTap: _toggleTranslation,
-                      child: Stack(alignment: Alignment.center, children: [
-                        if (isTranslating)
-                          AnimatedBuilder(
-                            animation: _glowAnimation,
-                            builder: (_, __) => Container(
-                              width: 215, height: 215,
+
+            SafeArea(
+              child: Column(
+                children: [
+                  // ── TOP BAR ─────────────────────────────────────────────
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                    child: Row(children: [
+                      Container(
+                          width: 36, height: 36,
+                          decoration: BoxDecoration(
+                              color: _accent.withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                  color: _accent.withOpacity(0.25))),
+                          child: const Icon(Icons.translate,
+                              color: _accent, size: 18)),
+                      const SizedBox(width: 10),
+                      Text('TranslateAR',
+                          style: TextStyle(
+                              color: txPri,
+                              fontSize: 19,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: -0.5)),
+                      const Spacer(),
+
+                      // Theme toggle button
+                      GestureDetector(
+                        onTap: _toggleTheme,
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 300),
+                          width: 36, height: 36,
+                          decoration: BoxDecoration(
+                              color: bar,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: bdr)),
+                          child: Icon(
+                              _isDark
+                                  ? Icons.light_mode_rounded
+                                  : Icons.dark_mode_rounded,
+                              color: _isDark
+                                  ? const Color(0xFFFFC107)
+                                  : txMut,
+                              size: 17),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      _topBtn(Icons.history_rounded, () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const HistoryScreen()))),
+                      const SizedBox(width: 8),
+                      _topBtn(Icons.settings_rounded, () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const SettingsScreen()))),
+                    ]),
+                  ),
+                  const SizedBox(height: 14),
+
+                  // ── MIC / SPEAKER SELECTORS ──────────────────────────────
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Column(children: [
+                      _deviceSelectorBar(
+                          icon: SelectedMic.type == 'bluetooth'
+                              ? Icons.headphones_rounded
+                              : Icons.smartphone_rounded,
+                          topLabel: 'MICROPHONE',
+                          valueLabel: SelectedMic.label,
+                          isActive: SelectedMic.type == 'bluetooth',
+                          onTap: _showMicSelector),
+                      const SizedBox(height: 8),
+                      _deviceSelectorBar(
+                          icon: SelectedSpeaker.type == 'bluetooth'
+                              ? Icons.headphones_rounded
+                              : Icons.phone_android_rounded,
+                          topLabel: 'SPEAKER',
+                          valueLabel: SelectedSpeaker.label,
+                          isActive: SelectedSpeaker.type == 'bluetooth',
+                          onTap: _showSpeakerSelector),
+                    ]),
+                  ),
+                  const SizedBox(height: 20),
+
+                  // ── ORB ──────────────────────────────────────────────────
+                  AnimatedBuilder(
+                    animation: _pulseAnimation,
+                    builder: (_, __) => Transform.scale(
+                      scale: isTranslating ? _pulseAnimation.value : 1.0,
+                      child: GestureDetector(
+                        onTap: _toggleTranslation,
+                        child: Stack(alignment: Alignment.center, children: [
+                          if (isTranslating)
+                            AnimatedBuilder(
+                              animation: _glowAnimation,
+                              builder: (_, __) => Container(
+                                width: 215, height: 215,
+                                decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                        color: _accent.withOpacity(
+                                            (_isDark ? 0.25 : 0.15) *
+                                                _glowAnimation.value),
+                                        width: 1)),
+                              ),
+                            ),
+                          Container(
+                              width: 188, height: 188,
                               decoration: BoxDecoration(
                                   shape: BoxShape.circle,
                                   border: Border.all(
-                                      color: const Color(0xFF10A37F)
-                                          .withOpacity(0.25 * _glowAnimation.value),
-                                      width: 1)),
-                            ),
-                          ),
-                        Container(
-                            width: 188, height: 188,
-                            decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                    color: isTranslating
-                                        ? const Color(0xFF10A37F).withOpacity(0.4)
-                                        : const Color(0xFF1E1E2E),
-                                    width: 1.5))),
-                        Container(
+                                      color: isTranslating
+                                          ? _accent.withOpacity(0.4)
+                                          : bdr,
+                                      width: 1.5))),
+                          Container(
                             width: 158, height: 158,
                             decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                gradient: RadialGradient(colors: isTranslating
-                                    ? [const Color(0xFF12B589),
-                                  const Color(0xFF0E9A72),
-                                  const Color(0xFF0B7D5C)]
-                                    : [const Color(0xFF1A1A2A),
-                                  const Color(0xFF111120),
-                                  const Color(0xFF0A0A15)]),
-                                boxShadow: isTranslating
-                                    ? [BoxShadow(
-                                    color: const Color(0xFF10A37F).withOpacity(0.5),
-                                    blurRadius: 40, spreadRadius: 4)]
-                                    : [BoxShadow(
-                                    color: Colors.black.withOpacity(0.5),
-                                    blurRadius: 20)]),
+                              shape: BoxShape.circle,
+                              gradient: RadialGradient(
+                                  colors: isTranslating
+                                      ? [
+                                    const Color(0xFF12B589),
+                                    const Color(0xFF0E9A72),
+                                    const Color(0xFF0B7D5C),
+                                  ]
+                                      : _isDark
+                                      ? [
+                                    const Color(0xFF1A1A2A),
+                                    const Color(0xFF111120),
+                                    const Color(0xFF0A0A15),
+                                  ]
+                                      : [
+                                    const Color(0xFFF2F2F2),
+                                    const Color(0xFFE8E8E8),
+                                    const Color(0xFFDDDDDD),
+                                  ]),
+                              boxShadow: isTranslating
+                                  ? [
+                                BoxShadow(
+                                    color: _accent.withOpacity(0.5),
+                                    blurRadius: 40,
+                                    spreadRadius: 4)
+                              ]
+                                  : [
+                                BoxShadow(
+                                    color: Colors.black.withOpacity(
+                                        _isDark ? 0.5 : 0.1),
+                                    blurRadius: 20)
+                              ],
+                            ),
                             child: Column(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
@@ -696,208 +886,251 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                       size: 50,
                                       color: isTranslating
                                           ? Colors.white
-                                          : const Color(0xFF444460)),
+                                          : txMut),
                                   const SizedBox(height: 6),
                                   Text(
-                                      isTranslating ? 'LISTENING' : 'TAP TO START',
+                                      isTranslating
+                                          ? 'LISTENING'
+                                          : 'TAP TO START',
                                       style: TextStyle(
                                           color: isTranslating
                                               ? Colors.white.withOpacity(0.9)
-                                              : const Color(0xFF444460),
+                                              : txMut,
                                           fontSize: 10,
                                           fontWeight: FontWeight.w700,
                                           letterSpacing: 1.5)),
-                                ])),
-                      ]),
+                                ]),
+                          ),
+                        ]),
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 10),
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 350),
-                  child: Text(statusText,
-                      key: ValueKey(statusText),
-                      style: TextStyle(
-                          color: isTranslating
-                              ? const Color(0xFF10A37F)
-                              : const Color(0xFF444460),
-                          fontSize: 13, fontWeight: FontWeight.w500)),
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  height: 40,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: List.generate(
-                        _waveHeights.length,
-                            (i) => AnimatedContainer(
-                            duration: const Duration(milliseconds: 110),
-                            margin: const EdgeInsets.symmetric(horizontal: 2),
-                            width: 3,
-                            height: isTranslating
-                                ? _waveHeights[i].clamp(4.0, 36.0)
-                                : 4.0,
-                            decoration: BoxDecoration(
+                  const SizedBox(height: 10),
+
+                  // ── STATUS ───────────────────────────────────────────────
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 350),
+                    child: Text(statusText,
+                        key: ValueKey(statusText),
+                        style: TextStyle(
+                            color: isTranslating ? _accent : txMut,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500)),
+                  ),
+                  const SizedBox(height: 10),
+
+                  // ── WAVE BARS ────────────────────────────────────────────
+                  SizedBox(
+                    height: 40,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: List.generate(
+                          _waveHeights.length,
+                              (i) => AnimatedContainer(
+                              duration: const Duration(milliseconds: 110),
+                              margin:
+                              const EdgeInsets.symmetric(horizontal: 2),
+                              width: 3,
+                              height: isTranslating
+                                  ? _waveHeights[i].clamp(4.0, 36.0)
+                                  : 4.0,
+                              decoration: BoxDecoration(
+                                  color: isTranslating
+                                      ? _accent.withOpacity(
+                                      0.3 + (i % 4) * 0.15)
+                                      : bdr,
+                                  borderRadius: BorderRadius.circular(2)))),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+
+                  // ── TEXT CARD ────────────────────────────────────────────
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 300),
+                        width: double.infinity,
+                        decoration: BoxDecoration(
+                            color: card,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
                                 color: isTranslating
-                                    ? const Color(0xFF10A37F)
-                                    .withOpacity(0.3 + (i % 4) * 0.15)
-                                    : const Color(0xFF1E1E2E),
-                                borderRadius: BorderRadius.circular(2)))),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    child: Container(
-                      width: double.infinity,
-                      decoration: BoxDecoration(
-                          color: const Color(0xFF0C0C18),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                              color: isTranslating
-                                  ? const Color(0xFF10A37F).withOpacity(0.2)
-                                  : const Color(0xFF141425))),
-                      child: Column(children: [
-                        Expanded(child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(children: [
-                                  Container(
-                                      width: 6, height: 6,
-                                      decoration: BoxDecoration(
-                                          shape: BoxShape.circle,
-                                          color: originalText.isNotEmpty
-                                              ? Colors.white
-                                              : const Color(0xFF1E1E2E))),
-                                  const SizedBox(width: 8),
-                                  const Text('ORIGINAL',
-                                      style: TextStyle(
-                                          color: Color(0xFF444460),
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.w700,
-                                          letterSpacing: 1.5)),
-                                ]),
-                                const SizedBox(height: 10),
-                                Expanded(child: SingleChildScrollView(
-                                    child: Text(
-                                        originalText.isEmpty
-                                            ? (isTranslating
-                                            ? 'Listening...'
-                                            : 'Tap the orb to begin')
-                                            : originalText,
-                                        style: TextStyle(
-                                            color: originalText.isEmpty
-                                                ? const Color(0xFF2A2A3A)
-                                                : Colors.white.withOpacity(0.85),
-                                            fontSize: 15,
-                                            height: 1.8)))),
-                              ]),
-                        )),
-                        Container(
-                            height: 1,
-                            margin: const EdgeInsets.symmetric(horizontal: 16),
-                            decoration: BoxDecoration(
-                                gradient: LinearGradient(colors: [
-                                  Colors.transparent,
-                                  const Color(0xFF10A37F).withOpacity(0.35),
-                                  Colors.transparent,
-                                ]))),
-                        Expanded(child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(children: [
-                                  Container(
-                                      width: 6, height: 6,
-                                      decoration: BoxDecoration(
-                                          shape: BoxShape.circle,
-                                          color: translatedText.isNotEmpty
-                                              ? const Color(0xFF10A37F)
-                                              : const Color(0xFF1E1E2E))),
-                                  const SizedBox(width: 8),
-                                  const Text('TRANSLATION',
-                                      style: TextStyle(
-                                          color: Color(0xFF10A37F),
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.w700,
-                                          letterSpacing: 1.5)),
-                                  const Spacer(),
-                                  if (translatedText.isNotEmpty)
-                                    GestureDetector(
-                                      onTap: () async {
-                                        await _tts.speak(translatedText);
-                                      },
-                                      child: Container(
-                                          padding: const EdgeInsets.all(6),
+                                    ? _accent.withOpacity(0.2)
+                                    : bdr2),
+                            boxShadow: _t.cardShadow),
+                        child: Column(children: [
+                          // ORIGINAL
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(children: [
+                                      Container(
+                                          width: 6, height: 6,
                                           decoration: BoxDecoration(
-                                              color: const Color(0xFF10A37F)
-                                                  .withOpacity(0.1),
-                                              borderRadius:
-                                              BorderRadius.circular(8)),
-                                          child: const Icon(
-                                              Icons.volume_up_rounded,
-                                              color: Color(0xFF10A37F),
-                                              size: 14)),
-                                    ),
-                                ]),
-                                const SizedBox(height: 10),
-                                Expanded(child: SingleChildScrollView(
-                                    child: FadeTransition(
-                                        opacity: translatedText.isNotEmpty
-                                            ? _textFadeAnimation
-                                            : const AlwaysStoppedAnimation(1),
+                                              shape: BoxShape.circle,
+                                              color: originalText.isNotEmpty
+                                                  ? txPri
+                                                  : bdr)),
+                                      const SizedBox(width: 8),
+                                      Text('ORIGINAL',
+                                          style: TextStyle(
+                                              color: txMut,
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.w700,
+                                              letterSpacing: 1.5)),
+                                    ]),
+                                    const SizedBox(height: 10),
+                                    Expanded(
+                                      child: SingleChildScrollView(
                                         child: Text(
-                                            translatedText.isEmpty
+                                            originalText.isEmpty
                                                 ? (isTranslating
-                                                ? 'Translation will appear here...'
-                                                : '')
-                                                : translatedText,
+                                                ? 'Listening...'
+                                                : 'Tap the orb to begin')
+                                                : originalText,
                                             style: TextStyle(
-                                                color: translatedText.isEmpty
-                                                    ? const Color(0xFF2A2A3A)
-                                                    : Colors.white,
+                                                color: originalText.isEmpty
+                                                    ? txDead
+                                                    : txPri.withOpacity(0.85),
                                                 fontSize: 17,
-                                                height: 1.8,
-                                                fontWeight: FontWeight.w500))))),
-                              ]),
-                        )),
-                      ]),
+                                                height: 1.7)),
+                                      ),
+                                    ),
+                                  ]),
+                            ),
+                          ),
+
+                          // Green gradient divider
+                          Container(
+                              height: 1,
+                              margin:
+                              const EdgeInsets.symmetric(horizontal: 16),
+                              decoration: BoxDecoration(
+                                  gradient: LinearGradient(colors: [
+                                    Colors.transparent,
+                                    _accent.withOpacity(0.35),
+                                    Colors.transparent,
+                                  ]))),
+
+                          // TRANSLATION
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(children: [
+                                      Container(
+                                          width: 6, height: 6,
+                                          decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              color: translatedText.isNotEmpty
+                                                  ? _accent
+                                                  : bdr)),
+                                      const SizedBox(width: 8),
+                                      const Text('TRANSLATION',
+                                          style: TextStyle(
+                                              color: _accent,
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.w700,
+                                              letterSpacing: 1.5)),
+                                      const Spacer(),
+                                      if (translatedText.isNotEmpty)
+                                        GestureDetector(
+                                          onTap: () async {
+                                            await _tts.speak(translatedText);
+                                          },
+                                          child: Container(
+                                              padding:
+                                              const EdgeInsets.all(6),
+                                              decoration: BoxDecoration(
+                                                  color: _accent
+                                                      .withOpacity(0.1),
+                                                  borderRadius:
+                                                  BorderRadius.circular(
+                                                      8)),
+                                              child: const Icon(
+                                                  Icons.volume_up_rounded,
+                                                  color: _accent,
+                                                  size: 14)),
+                                        ),
+                                    ]),
+                                    const SizedBox(height: 10),
+                                    Expanded(
+                                      child: SingleChildScrollView(
+                                        child: FadeTransition(
+                                          opacity: translatedText.isNotEmpty
+                                              ? _textFadeAnimation
+                                              : const AlwaysStoppedAnimation(
+                                              1),
+                                          child: Text(
+                                              translatedText.isEmpty
+                                                  ? (isTranslating
+                                                  ? 'Translation will appear here...'
+                                                  : '')
+                                                  : translatedText,
+                                              style: TextStyle(
+                                                  color: translatedText.isEmpty
+                                                      ? txDead
+                                                      : txPri,
+                                                  fontSize: 19,
+                                                  height: 1.7,
+                                                  fontWeight:
+                                                  FontWeight.w500)),
+                                        ),
+                                      ),
+                                    ),
+                                  ]),
+                            ),
+                          ),
+                        ]),
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 10),
-                Container(
-                  margin: const EdgeInsets.fromLTRB(20, 0, 20, 14),
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                  decoration: BoxDecoration(
-                      color: const Color(0xFF0C0C18),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: const Color(0xFF141425))),
-                  child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
-                      children: [
-                        _navItem(Icons.translate_rounded, 'Translate', 0),
-                        _navItem(Icons.history_rounded, 'History', 1),
-                        _navItem(Icons.language_rounded, 'Languages', 2),
-                        _navItem(Icons.person_rounded, 'Profile', 3),
-                      ]),
-                ),
-              ],
+                  const SizedBox(height: 10),
+
+                  // ── BOTTOM NAV ───────────────────────────────────────────
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 300),
+                    margin: const EdgeInsets.fromLTRB(20, 0, 20, 14),
+                    padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                    decoration: BoxDecoration(
+                        color: card,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: bdr2),
+                        boxShadow: _t.cardShadow),
+                    child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceAround,
+                        children: [
+                          _navItem(Icons.translate_rounded, 'Translate', 0),
+                          _navItem(Icons.history_rounded, 'History', 1),
+                          _navItem(Icons.language_rounded, 'Languages', 2),
+                          _navItem(Icons.person_rounded, 'Profile', 3),
+                        ]),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
+  // ── Helper widgets ────────────────────────────────────────────────────────
+
   Widget _deviceSelectorBar({
-    required IconData icon, required String topLabel,
-    required String valueLabel, required bool isActive, required VoidCallback onTap,
+    required IconData icon,
+    required String topLabel,
+    required String valueLabel,
+    required bool isActive,
+    required VoidCallback onTap,
   }) {
     return GestureDetector(
       onTap: onTap,
@@ -905,47 +1138,45 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
-            color: const Color(0xFF0F0F1A),
+            color: bar,
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
-                color: isActive
-                    ? const Color(0xFF10A37F).withOpacity(0.35)
-                    : const Color(0xFF1E1E2E))),
+                color: isActive ? _accent.withOpacity(0.35) : bdr),
+            boxShadow: _t.barShadow),
         child: Row(children: [
           Container(
               width: 32, height: 32,
               decoration: BoxDecoration(
-                  color: const Color(0xFF10A37F).withOpacity(0.1),
+                  color: _accent.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(9)),
-              child: Icon(icon, color: const Color(0xFF10A37F), size: 16)),
+              child: Icon(icon, color: _accent, size: 16)),
           const SizedBox(width: 10),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(topLabel,
-                style: const TextStyle(
-                    color: Color(0xFF444460),
-                    fontSize: 9,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 1.4)),
-            const SizedBox(height: 2),
-            Text(valueLabel,
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600)),
-          ])),
+          Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(topLabel,
+                        style: TextStyle(
+                            color: txMut,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 1.4)),
+                    const SizedBox(height: 2),
+                    Text(valueLabel,
+                        style: TextStyle(
+                            color: txPri,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600)),
+                  ])),
           Container(
               width: 7, height: 7,
               decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: isTranslating
-                      ? const Color(0xFF10A37F)
-                      : const Color(0xFF2A2A3A))),
+                  color: isTranslating ? _accent : txDead)),
           const SizedBox(width: 8),
-          const Text('Change',
-              style: TextStyle(color: Color(0xFF444460), fontSize: 11)),
+          Text('Change', style: TextStyle(color: txMut, fontSize: 11)),
           const SizedBox(width: 4),
-          const Icon(Icons.keyboard_arrow_down_rounded,
-              color: Color(0xFF444460), size: 16),
+          Icon(Icons.keyboard_arrow_down_rounded, color: txMut, size: 16),
         ]),
       ),
     );
@@ -956,38 +1187,39 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       child: Container(
           width: 36, height: 36,
           decoration: BoxDecoration(
-              color: const Color(0xFF0F0F1A),
+              color: bar,
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: const Color(0xFF1E1E2E))),
-          child: Icon(icon, color: const Color(0xFF555570), size: 17)));
+              border: Border.all(color: bdr)),
+          child: Icon(icon, color: navDead, size: 17)));
 
   Widget _navItem(IconData icon, String label, int index) {
     final isActive = _currentNavIndex == index;
     return GestureDetector(
       onTap: () {
         setState(() => _currentNavIndex = index);
-        if (index == 1) Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoryScreen()));
-        else if (index == 2) Navigator.push(context, MaterialPageRoute(builder: (_) => const LanguagesScreen()));
-        else if (index == 3) Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
+        if (index == 1) {
+          Navigator.push(context,
+              MaterialPageRoute(builder: (_) => const HistoryScreen()));
+        } else if (index == 2) {
+          Navigator.push(context,
+              MaterialPageRoute(builder: (_) => const LanguagesScreen()));
+        } else if (index == 3) {
+          Navigator.push(context,
+              MaterialPageRoute(builder: (_) => const ProfileScreen()));
+        }
       },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 8),
         decoration: BoxDecoration(
-            color: isActive
-                ? const Color(0xFF10A37F).withOpacity(0.12)
-                : Colors.transparent,
+            color: isActive ? _accent.withOpacity(0.12) : Colors.transparent,
             borderRadius: BorderRadius.circular(13)),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon,
-              color: isActive ? const Color(0xFF10A37F) : const Color(0xFF2E2E45),
-              size: 21),
+          Icon(icon, color: isActive ? _accent : txDd2, size: 21),
           const SizedBox(height: 3),
           Text(label,
               style: TextStyle(
-                  color: isActive
-                      ? const Color(0xFF10A37F)
-                      : const Color(0xFF2E2E45),
+                  color: isActive ? _accent : txDd2,
                   fontSize: 10,
                   fontWeight: FontWeight.w600)),
         ]),

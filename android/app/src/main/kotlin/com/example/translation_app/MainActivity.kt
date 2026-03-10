@@ -60,6 +60,14 @@ class MainActivity : FlutterActivity() {
                             prepareForListening(audio)
                             result.success(true)
                         }
+                        // ── NEW FIX: reset audio mode for BT TTS ──────────
+                        "resetAudioForTTS" -> {
+                            audio.stopBluetoothSco()
+                            audio.isBluetoothScoOn = false
+                            audio.mode = AudioManager.MODE_NORMAL
+                            audio.isSpeakerphoneOn = false
+                            result.success(true)
+                        }
                         else -> result.notImplemented()
                     }
                 } catch (e: Exception) {
@@ -164,6 +172,7 @@ class MainActivity : FlutterActivity() {
                 audio.isSpeakerphoneOn = false
             }
         }
+        System.setProperty("persist.sys.prefer_offline_speech", "true")
     }
 
     private fun prepareForSpeaking(audio: AudioManager) {

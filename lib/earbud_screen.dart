@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'home_screen.dart';
+import 'app_theme.dart';
 
 class EarbudScreen extends StatefulWidget {
   const EarbudScreen({super.key});
@@ -15,11 +17,11 @@ class _EarbudScreenState extends State<EarbudScreen>
   List<Map<String, String>> devices = [];
   Map<String, String>? selectedDevice;
   bool isLoading = false;
+  late AppTheme _t;
 
   late AnimationController _fadeController;
   late Animation<double> _fadeAnimation;
 
-  // Keywords to identify earbuds/headphones from device name
   final List<String> _earbudKeywords = [
     'ear', 'bud', 'pod', 'headphone', 'headset', 'airpod',
     'galaxy buds', 'nothing', 'pixel buds', 'jabra', 'sony',
@@ -30,6 +32,9 @@ class _EarbudScreenState extends State<EarbudScreen>
   @override
   void initState() {
     super.initState();
+    _t = const AppTheme(true);
+    _loadTheme();
+
     _fadeController = AnimationController(
       duration: const Duration(milliseconds: 600),
       vsync: this,
@@ -39,6 +44,21 @@ class _EarbudScreenState extends State<EarbudScreen>
     );
     _fadeController.forward();
     _getDevices();
+  }
+
+  Future<void> _loadTheme() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedMode = prefs.getString('theme_mode') ?? 'dark';
+    final isDark = _resolvedIsDark(savedMode);
+    if (mounted) setState(() => _t = AppTheme(isDark));
+  }
+
+  bool _resolvedIsDark(String mode) {
+    if (mode == 'light') return false;
+    if (mode == 'dark') return true;
+    final brightness =
+        WidgetsBinding.instance.platformDispatcher.platformBrightness;
+    return brightness == Brightness.dark;
   }
 
   @override
@@ -55,13 +75,11 @@ class _EarbudScreenState extends State<EarbudScreen>
   Future<void> _getDevices() async {
     setState(() => isLoading = true);
     try {
-      // Wait for A2DP profile proxy to connect
       await Future.delayed(const Duration(milliseconds: 1500));
       final List<dynamic> result =
       await platform.invokeMethod('getConnectedDevices');
       final fetched = result.map((d) => Map<String, String>.from(d)).toList();
 
-      // Auto-select: prefer earbuds/headphones by name
       Map<String, String>? autoSelected;
       for (final d in fetched) {
         if (_isEarbud(d['name'] ?? '')) {
@@ -69,7 +87,6 @@ class _EarbudScreenState extends State<EarbudScreen>
           break;
         }
       }
-      // If no earbud found by name, auto-select first device
       if (autoSelected == null && fetched.isNotEmpty) {
         autoSelected = fetched.first;
       }
@@ -105,7 +122,7 @@ class _EarbudScreenState extends State<EarbudScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0A0A0F),
+      backgroundColor: _t.bg,
       body: FadeTransition(
         opacity: _fadeAnimation,
         child: SafeArea(
@@ -115,7 +132,7 @@ class _EarbudScreenState extends State<EarbudScreen>
               children: [
                 const SizedBox(height: 40),
 
-                // Header
+                // ── Header ──────────────────────────────────────────────────
                 Center(
                   child: Column(
                     children: [
@@ -123,8 +140,7 @@ class _EarbudScreenState extends State<EarbudScreen>
                         alignment: Alignment.center,
                         children: [
                           Container(
-                            width: 110,
-                            height: 110,
+                            width: 110, height: 110,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
                               boxShadow: [
@@ -137,8 +153,7 @@ class _EarbudScreenState extends State<EarbudScreen>
                             ),
                           ),
                           Container(
-                            width: 86,
-                            height: 86,
+                            width: 86, height: 86,
                             decoration: BoxDecoration(
                               color: const Color(0xFF10A37F).withOpacity(0.1),
                               shape: BoxShape.circle,
@@ -153,19 +168,19 @@ class _EarbudScreenState extends State<EarbudScreen>
                         ],
                       ),
                       const SizedBox(height: 20),
-                      const Text(
+                      Text(
                         'Connect Earbuds',
                         style: TextStyle(
-                          color: Colors.white,
+                          color: _t.txPri,
                           fontSize: 28,
                           fontWeight: FontWeight.w700,
                           letterSpacing: -0.5,
                         ),
                       ),
                       const SizedBox(height: 6),
-                      const Text(
+                      Text(
                         'Select your earbuds to continue',
-                        style: TextStyle(color: Color(0xFF555570), fontSize: 14),
+                        style: TextStyle(color: _t.txSec, fontSize: 14),
                       ),
                     ],
                   ),
@@ -173,17 +188,18 @@ class _EarbudScreenState extends State<EarbudScreen>
 
                 const SizedBox(height: 28),
 
-                // Refresh button
+                // ── Refresh button ──────────────────────────────────────────
                 GestureDetector(
                   onTap: isLoading ? null : _getDevices,
                   child: Container(
                     width: double.infinity,
                     padding: const EdgeInsets.symmetric(vertical: 13),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF0F0F1A),
+                      color: _t.bar,
                       borderRadius: BorderRadius.circular(13),
                       border: Border.all(
                           color: const Color(0xFF10A37F).withOpacity(0.3)),
+                      boxShadow: _t.cardShadow,
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -212,38 +228,35 @@ class _EarbudScreenState extends State<EarbudScreen>
 
                 const SizedBox(height: 16),
 
-                // Count + auto-select notice
-                Row(
-                  children: [
-                    Text(
-                      '${devices.length} device(s) found',
-                      style: const TextStyle(
-                          color: Color(0xFF555570), fontSize: 13),
-                    ),
-                    if (selectedDevice != null) ...[
-                      const Spacer(),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF10A37F).withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: const Text(
-                          'Auto-selected',
-                          style: TextStyle(
-                              color: Color(0xFF10A37F),
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600),
-                        ),
+                // ── Count + auto-select notice ──────────────────────────────
+                Row(children: [
+                  Text(
+                    '${devices.length} device(s) found',
+                    style: TextStyle(color: _t.txSec, fontSize: 13),
+                  ),
+                  if (selectedDevice != null) ...[
+                    const Spacer(),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF10A37F).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(6),
                       ),
-                    ],
+                      child: const Text(
+                        'Auto-selected',
+                        style: TextStyle(
+                            color: Color(0xFF10A37F),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600),
+                      ),
+                    ),
                   ],
-                ),
+                ]),
 
                 const SizedBox(height: 12),
 
-                // Device list
+                // ── Device list ─────────────────────────────────────────────
                 Expanded(
                   child: devices.isEmpty && !isLoading
                       ? Center(
@@ -253,27 +266,25 @@ class _EarbudScreenState extends State<EarbudScreen>
                         Container(
                           width: 80, height: 80,
                           decoration: BoxDecoration(
-                            color: const Color(0xFF0F0F1A),
+                            color: _t.bar,
                             shape: BoxShape.circle,
-                            border: Border.all(
-                                color: const Color(0xFF1E1E2E)),
+                            border: Border.all(color: _t.bdr),
                           ),
-                          child: const Icon(
-                              Icons.headphones_rounded,
-                              size: 36, color: Color(0xFF333350)),
+                          child: Icon(Icons.headphones_rounded,
+                              size: 36, color: _t.txDead),
                         ),
                         const SizedBox(height: 16),
-                        const Text('No earbuds connected',
+                        Text('No earbuds connected',
                             style: TextStyle(
-                                color: Color(0xFF555570),
+                                color: _t.txSec,
                                 fontSize: 16,
                                 fontWeight: FontWeight.w600)),
                         const SizedBox(height: 8),
-                        const Text(
+                        Text(
                           'Connect your earbuds via\nBluetooth and tap refresh',
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                              color: Color(0xFF333350), fontSize: 13),
+                              color: _t.txDead, fontSize: 13),
                         ),
                       ],
                     ),
@@ -297,100 +308,96 @@ class _EarbudScreenState extends State<EarbudScreen>
                           decoration: BoxDecoration(
                             color: isSelected
                                 ? const Color(0xFF10A37F).withOpacity(0.08)
-                                : const Color(0xFF0F0F1A),
+                                : _t.bar,
                             borderRadius: BorderRadius.circular(16),
                             border: Border.all(
                               color: isSelected
                                   ? const Color(0xFF10A37F).withOpacity(0.5)
-                                  : const Color(0xFF1E1E2E),
+                                  : _t.bdr,
                               width: isSelected ? 1.5 : 1,
                             ),
+                            boxShadow: _t.cardShadow,
                           ),
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 46, height: 46,
-                                decoration: BoxDecoration(
-                                  color: isSelected
-                                      ? const Color(0xFF10A37F)
-                                      .withOpacity(0.15)
-                                      : const Color(0xFF141420),
-                                  borderRadius: BorderRadius.circular(13),
-                                ),
-                                child: Icon(
-                                  isEarbudDevice
-                                      ? Icons.headphones_rounded
-                                      : Icons.bluetooth_rounded,
-                                  color: isSelected
-                                      ? const Color(0xFF10A37F)
-                                      : const Color(0xFF555570),
-                                  size: 22,
-                                ),
+                          child: Row(children: [
+                            Container(
+                              width: 46, height: 46,
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? const Color(0xFF10A37F)
+                                    .withOpacity(0.15)
+                                    : _t.iconBg,
+                                borderRadius: BorderRadius.circular(13),
                               ),
-                              const SizedBox(width: 14),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment:
-                                  CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Text(
-                                          device['name'] ?? 'Unknown Device',
+                              child: Icon(
+                                isEarbudDevice
+                                    ? Icons.headphones_rounded
+                                    : Icons.bluetooth_rounded,
+                                color: isSelected
+                                    ? const Color(0xFF10A37F)
+                                    : _t.txSec,
+                                size: 22,
+                              ),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment:
+                                CrossAxisAlignment.start,
+                                children: [
+                                  Row(children: [
+                                    Text(
+                                      device['name'] ?? 'Unknown Device',
+                                      style: TextStyle(
+                                        color: isSelected
+                                            ? _t.txPri
+                                            : _t.txSec,
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 15,
+                                      ),
+                                    ),
+                                    if (isEarbudDevice) ...[
+                                      const SizedBox(width: 6),
+                                      Container(
+                                        padding: const EdgeInsets
+                                            .symmetric(
+                                            horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF10A37F)
+                                              .withOpacity(0.1),
+                                          borderRadius:
+                                          BorderRadius.circular(4),
+                                        ),
+                                        child: const Text(
+                                          'Earbuds',
                                           style: TextStyle(
-                                            color: isSelected
-                                                ? Colors.white
-                                                : const Color(0xFF8888A8),
+                                            color: Color(0xFF10A37F),
+                                            fontSize: 10,
                                             fontWeight: FontWeight.w600,
-                                            fontSize: 15,
                                           ),
                                         ),
-                                        if (isEarbudDevice) ...[
-                                          const SizedBox(width: 6),
-                                          Container(
-                                            padding: const EdgeInsets
-                                                .symmetric(
-                                                horizontal: 6, vertical: 2),
-                                            decoration: BoxDecoration(
-                                              color: const Color(0xFF10A37F)
-                                                  .withOpacity(0.1),
-                                              borderRadius:
-                                              BorderRadius.circular(4),
-                                            ),
-                                            child: const Text(
-                                              'Earbuds',
-                                              style: TextStyle(
-                                                color: Color(0xFF10A37F),
-                                                fontSize: 10,
-                                                fontWeight: FontWeight.w600,
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ],
-                                    ),
-                                    const SizedBox(height: 3),
-                                    Text(
-                                      device['address'] ?? '',
-                                      style: const TextStyle(
-                                          color: Color(0xFF333350),
-                                          fontSize: 12),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              if (isSelected)
-                                Container(
-                                  width: 24, height: 24,
-                                  decoration: const BoxDecoration(
-                                    color: Color(0xFF10A37F),
-                                    shape: BoxShape.circle,
+                                      ),
+                                    ],
+                                  ]),
+                                  const SizedBox(height: 3),
+                                  Text(
+                                    device['address'] ?? '',
+                                    style: TextStyle(
+                                        color: _t.txMut, fontSize: 12),
                                   ),
-                                  child: const Icon(Icons.check,
-                                      color: Colors.white, size: 14),
+                                ],
+                              ),
+                            ),
+                            if (isSelected)
+                              Container(
+                                width: 24, height: 24,
+                                decoration: const BoxDecoration(
+                                  color: Color(0xFF10A37F),
+                                  shape: BoxShape.circle,
                                 ),
-                            ],
-                          ),
+                                child: const Icon(Icons.check,
+                                    color: Colors.white, size: 14),
+                              ),
+                          ]),
                         ),
                       );
                     },
@@ -399,7 +406,7 @@ class _EarbudScreenState extends State<EarbudScreen>
 
                 const SizedBox(height: 12),
 
-                // Continue button — always works (with or without selection)
+                // ── Continue button ─────────────────────────────────────────
                 GestureDetector(
                   onTap: _goHome,
                   child: Container(
@@ -437,13 +444,13 @@ class _EarbudScreenState extends State<EarbudScreen>
 
                 const SizedBox(height: 12),
 
-                // Skip
+                // ── Skip ────────────────────────────────────────────────────
                 GestureDetector(
                   onTap: _goHome,
-                  child: const Text(
+                  child: Text(
                     'Skip for now',
                     style: TextStyle(
-                        color: Color(0xFF555570),
+                        color: _t.txSec,
                         fontSize: 14,
                         fontWeight: FontWeight.w500),
                   ),
