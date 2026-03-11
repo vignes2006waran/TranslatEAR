@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_mlkit_translation/google_mlkit_translation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'translation_service.dart';
+import 'vosk_service.dart';
 import 'app_theme.dart';
 
 class LanguagesScreen extends StatefulWidget {
@@ -14,6 +15,8 @@ class _LanguagesScreenState extends State<LanguagesScreen> {
   final _modelManager = OnDeviceTranslatorModelManager();
   final Map<String, bool> _downloaded = {};
   final Map<String, bool> _downloading = {};
+  final Map<String, bool> _voskDownloaded = {};
+  final Map<String, bool> _voskDownloading = {};
   final TextEditingController _search = TextEditingController();
   String _query = '';
   late AppTheme _t;
@@ -106,25 +109,40 @@ class _LanguagesScreenState extends State<LanguagesScreen> {
   Future<void> _checkAll() async {
     for (final lang in _allLanguages) {
       final code = (lang['lang'] as TranslateLanguage).bcpCode;
-      final ok = await _modelManager.isModelDownloaded(code);
-      if (mounted) setState(() => _downloaded[code] = ok);
+      final mlOk = await _modelManager.isModelDownloaded(code);
+      final voskOk = await VoskService.instance.isModelDownloaded(code);
+      if (mounted) setState(() {
+        _downloaded[code] = mlOk;
+        _voskDownloaded[code] = voskOk;
+      });
     }
   }
 
   Future<void> _download(TranslateLanguage lang) async {
     final code = lang.bcpCode;
-    setState(() => _downloading[code] = true);
+    setState(() { _downloading[code] = true; _voskDownloading[code] = true; });
     try {
+      // Download ML Kit translation model
       await _modelManager.downloadModel(code);
-      if (mounted) {
-        setState(() {
-          _downloaded[code] = true;
-          _downloading.remove(code);
-        });
-        TranslationService.instance.reloadIfNeeded(lang);
-      }
+      if (mounted) setState(() { _downloaded[code] = true; _downloading.remove(code); });
+      TranslationService.instance.reloadIfNeeded(lang);
+
+      // Download Vosk speech model (runs in parallel phase)
+      await VoskService.instance.downloadModel(
+        code,
+        onProgress: (p) {
+          // Progress shown via _voskDownloading indicator
+        },
+      );
+      if (mounted) setState(() {
+        _voskDownloaded[code] = true;
+        _voskDownloading.remove(code);
+      });
     } catch (e) {
-      if (mounted) setState(() => _downloading.remove(code));
+      if (mounted) setState(() {
+        _downloading.remove(code);
+        _voskDownloading.remove(code);
+      });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text('Download failed: $e'),
@@ -136,7 +154,11 @@ class _LanguagesScreenState extends State<LanguagesScreen> {
   Future<void> _delete(TranslateLanguage lang) async {
     final code = lang.bcpCode;
     await _modelManager.deleteModel(code);
-    if (mounted) setState(() => _downloaded[code] = false);
+    await VoskService.instance.deleteModel(code);
+    if (mounted) setState(() {
+      _downloaded[code] = false;
+      _voskDownloaded[code] = false;
+    });
   }
 
   List<Map<String, dynamic>> get _filtered {
@@ -287,7 +309,7 @@ class _LanguagesScreenState extends State<LanguagesScreen> {
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                        'Download languages to use offline. Each ~30 MB.',
+                        'Download languages for offline translation + speech. Each ~80 MB.',
                         style: TextStyle(
                             color: Color(0xFF10A37F), fontSize: 11)),
                   ),
@@ -377,7 +399,7 @@ class _LanguagesScreenState extends State<LanguagesScreen> {
                                       ? 'Active'
                                       : isDownloaded
                                       ? 'Tap to use'
-                                      : '~30 MB',
+                                      : '~80 MB',
                                   style: TextStyle(
                                     color: isActive
                                         ? const Color(0xFF10A37F)

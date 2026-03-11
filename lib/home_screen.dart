@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:speech_to_text/speech_to_text.dart';
+import 'vosk_service.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'dart:math';
 import 'dart:async';
@@ -53,16 +53,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   bool isTranslating = false;
   String statusText = 'Ready to translate';
   String _detectedLangName = 'Auto';
-  String _selectedSourceLang = 'English'; // what the opposite person speaks
+  String _selectedSourceLang = 'English';
   int _currentNavIndex = 0;
 
-  // ── Accumulated paragraph text (never erased until session stops) ──────────
-  String _originalParagraph = '';    // all completed sentences original
-  String _translatedParagraph = '';  // all completed sentences translated
-  String _currentPartialOriginal = ''; // what's being spoken right now (partial)
-  String _currentPartialTranslated = ''; // live translation of current partial
+  // ── Accumulated paragraph text ────────────────────────────────────────────
+  String _originalParagraph = '';
+  String _translatedParagraph = '';
+  String _currentPartialOriginal = '';
+  String _currentPartialTranslated = '';
 
-  // What the UI shows = completed paragraph + current partial
   String get originalText => _currentPartialOriginal.isEmpty
       ? _originalParagraph
       : (_originalParagraph.isEmpty
@@ -79,7 +78,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late AppTheme _t;
   bool get _isDark => _t.isDark;
 
-  // Convenience getters so existing widget code needs no changes
   Color get bg      => _t.bg;
   Color get card    => _t.card;
   Color get bar     => _t.bar;
@@ -93,7 +91,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Color get navDead => _t.txNav;
 
   // ── Speech / TTS ──────────────────────────────────────────────────────────
-  final SpeechToText _speech = SpeechToText();
+  final VoskService _vosk = VoskService.instance;
   final FlutterTts _tts = FlutterTts();
   bool _speechAvailable = false;
 
@@ -103,13 +101,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Timer? _wordDebounce;
   Timer? _silenceTimer;
 
-  // Fixed locale based on selected source language
-  String get _currentLocaleId =>
-      _speechLocaleMap[_selectedSourceLang] ?? 'en-IN';
+  String get _currentLocaleId => 'en-IN';
+  void _advanceLocale() {}
+  void _lockLocale(String _) {}
+  void _resetLocaleRotation() {}
 
-  void _advanceLocale() {} // no-op — locale is now fixed per user selection
-
-  // ScrollControllers to auto-scroll to bottom as text accumulates
   final ScrollController _origScrollController = ScrollController();
   final ScrollController _transScrollController = ScrollController();
 
@@ -133,14 +129,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
-    _t = const AppTheme(true); // default until prefs load
+    _t = const AppTheme(true);
     _initAnimations();
     _initSpeech();
     _loadAndApplyNativeLanguage();
     _loadTheme();
+
+    // ── TTS completion listener — resume mic after TTS finishes ──────────────
+    _tts.setCompletionHandler(() {
+      _vosk.setTtsSpeaking(false);
+    });
+    _tts.setErrorHandler((msg) {
+      _vosk.setTtsSpeaking(false);
+    });
   }
 
-  // Speech recognition locale for each language
   static const Map<String, String> _speechLocaleMap = {
     'Tamil':      'ta-IN',
     'Hindi':      'hi-IN',
@@ -188,8 +191,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return brightness == Brightness.dark;
   }
 
-  /// Called by the toggle button in the top bar.
-  /// Flips theme AND writes both keys for full compatibility.
   Future<void> _toggleTheme() async {
     final newDark = !_isDark;
     setState(() => _t = AppTheme(newDark));
@@ -253,23 +254,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Future<void> _initSpeech() async {
     await Permission.microphone.request();
-    _speechAvailable = await _speech.initialize(
-      onError: (e) {
-        debugPrint('Speech error: $e');
-        if (mounted && isTranslating) {
-          Future.delayed(const Duration(milliseconds: 500), _startListening);
-        }
-      },
-      onStatus: (status) {
-        debugPrint('Speech status: $status');
-        // If speech stops unexpectedly while we're still translating, restart
-        if (status == 'done' || status == 'notListening') {
-          if (mounted && isTranslating) {
-            Future.delayed(const Duration(milliseconds: 100), _startListening);
-          }
-        }
-      },
-    );
+    _speechAvailable = await _vosk.initialize();
     if (mounted) setState(() {});
   }
 
@@ -298,7 +283,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _glowController.dispose();
     _textFadeController.dispose();
     _silenceTimer?.cancel();
-    _speech.stop();
+    _vosk.stopListening();
     _tts.stop();
     SoundManager.dispose();
     super.dispose();
@@ -569,8 +554,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   // ── Translation logic ─────────────────────────────────────────────────────
 
-  // ── Translation logic ─────────────────────────────────────────────────────
-
   void _toggleTranslation() {
     if (!mounted) return;
     if (!isTranslating) {
@@ -579,6 +562,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         statusText = 'Listening...';
         _detectedLangName = 'Auto';
         _originalParagraph = '';
+        _resetLocaleRotation();
         _translatedParagraph = '';
         _currentPartialOriginal = '';
         _currentPartialTranslated = '';
@@ -621,9 +605,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     if (!isTranslating || !mounted) return;
 
     if (!_speechAvailable) {
-      _speechAvailable = await _speech.initialize(
-        onError: (e) => debugPrint('Speech error: $e'),
-      );
+      _speechAvailable = await _vosk.initialize();
     }
     if (!_speechAvailable || !isTranslating || !mounted) return;
 
@@ -632,59 +614,41 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _lastWordCount = 0;
     TranslationService.instance.clearDetectionBuffer();
 
-    _speech.listen(
-      onResult: (result) {
+    await _vosk.startListening(
+      bcpCode: 'en',
+      onResult: (words, isFinal) {
         if (!mounted || !isTranslating) return;
-        final words = result.recognizedWords.trim();
-        if (words.isEmpty) return;
+        final text = words.trim();
+        if (text.isEmpty) return;
 
-        // Show growing text live in original box
-        setState(() => _currentPartialOriginal = words);
+        setState(() => _currentPartialOriginal = text);
 
-        if (result.finalResult) {
-          // Only translate FINAL complete sentence — gives ML Kit full text
-          // for 95%+ language detection accuracy
+        if (isFinal) {
           _wordDebounce?.cancel();
-          if (words != _lastSubmitted && words.length > 1) {
-            _lastSubmitted = words;
+          if (text != _lastSubmitted && text.length > 1) {
+            _lastSubmitted = text;
             _originalParagraph = _originalParagraph.isEmpty
-                ? words
-                : _originalParagraph + '\n' + words;
+                ? text
+                : '$_originalParagraph\n$text';
             setState(() => _currentPartialOriginal = '');
-            _translateFinalAndAppend(words);
-            _sessionConversations.add({'original': words, 'translated': ''});
+            _translateFinalAndAppend(text);
+            _sessionConversations.add({'original': text, 'translated': ''});
           } else {
             setState(() => _currentPartialOriginal = '');
           }
           _lastTranslatedText = '';
           _lastWordCount = 0;
-          if (isTranslating && mounted) {
-            Future.delayed(const Duration(milliseconds: 100), _startListening);
-          }
         }
       },
-      onSoundLevelChange: null,
-      listenFor: const Duration(seconds: 30),
-      pauseFor: const Duration(seconds: 3),
-      listenOptions: SpeechListenOptions(
-        partialResults: true,
-        cancelOnError: false,
-        autoPunctuation: false,
-        enableHapticFeedback: false,
-        onDevice: false,
-      ),
-      localeId: 'en-IN',
     );
   }
 
-  // Live: translate growing partial — updates as person speaks word by word
   Future<void> _translatePartialLive(String text) async {
     if (!mounted || !isTranslating) return;
     try {
       final translation =
       await TranslationService.instance.translateOnMainThread(text);
       if (!mounted || !isTranslating) return;
-      // Empty result means native language detected — skip silently
       if (translation.isEmpty) return;
       final detected = TranslationService.instance.lastDetectedLangName;
       setState(() {
@@ -697,19 +661,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     } catch (e) {}
   }
 
-  // Final: sentence confirmed — append to paragraph permanently and speak
+  // ── KEY METHOD: Translate final sentence + speak with TTS pause ───────────
   Future<void> _translateFinalAndAppend(String text) async {
     if (!mounted || !isTranslating) return;
     try {
       final translation =
       await TranslationService.instance.translateOnMainThread(text);
       if (!mounted || !isTranslating) return;
-      // Empty = native language detected — don't append or speak
+
       if (translation.isEmpty) return;
+
       final detected = TranslationService.instance.lastDetectedLangName;
+
       _translatedParagraph = _translatedParagraph.isEmpty
           ? translation
-          : _translatedParagraph + '\n' + translation;
+          : '$_translatedParagraph\n$translation';
+
       setState(() {
         _currentPartialTranslated = '';
         _detectedLangName = detected;
@@ -717,6 +684,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       });
       _textFadeController.reset();
       _textFadeController.forward();
+
       // Auto-scroll both boxes to bottom
       Future.delayed(const Duration(milliseconds: 50), () {
         if (_origScrollController.hasClients) {
@@ -734,7 +702,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           );
         }
       });
-      // Speak the final translation
+
+      // ── SPEAK: pause mic BEFORE TTS, resume AFTER via completion handler ──
       final ttsLangMap = {
         'Tamil': 'ta-IN',     'Hindi': 'hi-IN',   'Telugu': 'te-IN',
         'Kannada': 'kn-IN',   'Bengali': 'bn-IN',  'Gujarati': 'gu-IN',
@@ -747,18 +716,28 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         'Swedish': 'sv-SE',
       };
       await _tts.setLanguage(ttsLangMap[nativeLangName] ?? 'ta-IN');
-      try { await _audioChannel.invokeMethod('resetAudioForTTS'); } catch (e) {}
+
+      // Pause mic restarts during TTS playback to prevent error_busy spam
+      _vosk.setTtsSpeaking(true);
+      try {
+        await _audioChannel.invokeMethod('resetAudioForTTS');
+      } catch (e) {}
       await _tts.speak(translation);
-    } catch (e) {}
+      // Note: _vosk.setTtsSpeaking(false) is called via _tts.setCompletionHandler
+      // set in initState — so mic resumes automatically when TTS finishes
+
+    } catch (e) {
+      // Make sure mic is never left paused on error
+      _vosk.setTtsSpeaking(false);
+    }
   }
 
   void _showSourceLanguagePicker() {
     final locales = TranslationService.instance.downloadedSpeechLocales;
-    // Build list of downloaded language names from locale map
     final downloaded = _speechLocaleMap.entries
         .where((e) => locales.contains(e.value))
         .map((e) => e.key)
-        .where((name) => name != nativeLangName) // exclude native
+        .where((name) => name != nativeLangName)
         .toList()
       ..sort();
 
@@ -781,23 +760,31 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(width: 36, height: 4,
+            Container(
+                width: 36,
+                height: 4,
                 decoration: BoxDecoration(
                     color: bdr2, borderRadius: BorderRadius.circular(2))),
             const SizedBox(height: 12),
             Text('Opposite person speaks',
-                style: TextStyle(color: txPri, fontSize: 15, fontWeight: FontWeight.w700)),
+                style: TextStyle(
+                    color: txPri,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700)),
             const SizedBox(height: 12),
             ...downloaded.map((lang) => ListTile(
               leading: Icon(Icons.language_rounded,
-                  color: lang == _selectedSourceLang ? _accent : txMut, size: 20),
+                  color: lang == _selectedSourceLang ? _accent : txMut,
+                  size: 20),
               title: Text(lang,
                   style: TextStyle(
                       color: lang == _selectedSourceLang ? _accent : txPri,
                       fontWeight: lang == _selectedSourceLang
-                          ? FontWeight.w700 : FontWeight.normal)),
+                          ? FontWeight.w700
+                          : FontWeight.normal)),
               trailing: lang == _selectedSourceLang
-                  ? Icon(Icons.check_circle_rounded, color: _accent, size: 20)
+                  ? Icon(Icons.check_circle_rounded,
+                  color: _accent, size: 20)
                   : null,
               onTap: () {
                 setState(() => _selectedSourceLang = lang);
@@ -814,9 +801,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Future<void> _stopAll() async {
     _silenceTimer?.cancel();
     _wordDebounce?.cancel();
-    _speech.statusListener = null;
-    _speech.stop();
-    try { await _tts.stop(); } catch (e) {}
+    _vosk.setTtsSpeaking(false); // ensure mic flag is cleared on stop
+    await _vosk.stopListening();
+    try {
+      await _tts.stop();
+    } catch (e) {}
   }
 
   void _saveSession() {
@@ -858,7 +847,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         backgroundColor: Colors.transparent,
         body: Stack(
           children: [
-            // Glow effect
             if (isTranslating)
               AnimatedBuilder(
                 animation: _glowAnimation,
@@ -866,7 +854,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   top: -80,
                   left: MediaQuery.of(context).size.width / 2 - 130,
                   child: Container(
-                    width: 260, height: 260,
+                    width: 260,
+                    height: 260,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       boxShadow: [
@@ -885,12 +874,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             SafeArea(
               child: Column(
                 children: [
-                  // ── TOP BAR ─────────────────────────────────────────────
+                  // ── TOP BAR ───────────────────────────────────────────────
                   Padding(
                     padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
                     child: Row(children: [
                       Container(
-                          width: 36, height: 36,
+                          width: 36,
+                          height: 36,
                           decoration: BoxDecoration(
                               color: _accent.withOpacity(0.12),
                               borderRadius: BorderRadius.circular(10),
@@ -906,13 +896,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               fontWeight: FontWeight.w700,
                               letterSpacing: -0.5)),
                       const Spacer(),
-
-                      // Theme toggle button
                       GestureDetector(
                         onTap: _toggleTheme,
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 300),
-                          width: 36, height: 36,
+                          width: 36,
+                          height: 36,
                           decoration: BoxDecoration(
                               color: bar,
                               borderRadius: BorderRadius.circular(10),
@@ -928,39 +917,48 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      _topBtn(Icons.history_rounded, () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => const HistoryScreen()))),
+                      _topBtn(
+                          Icons.history_rounded,
+                              () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const HistoryScreen()))),
                       const SizedBox(width: 8),
-                      _topBtn(Icons.settings_rounded, () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => const SettingsScreen()))),
+                      _topBtn(
+                          Icons.settings_rounded,
+                              () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const SettingsScreen()))),
                     ]),
                   ),
                   const SizedBox(height: 10),
 
-                  // ── LANGUAGE BAR ─────────────────────────────────────────
+                  // ── LANGUAGE BAR ──────────────────────────────────────────
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 20),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 10),
                       decoration: BoxDecoration(
                           color: card,
                           borderRadius: BorderRadius.circular(14),
                           border: Border.all(color: bdr2)),
                       child: Row(
                         children: [
-                          Icon(Icons.language_rounded, color: _accent, size: 15),
+                          Icon(Icons.language_rounded,
+                              color: _accent, size: 15),
                           const SizedBox(width: 8),
                           Text(_detectedLangName,
                               style: TextStyle(
-                                  color: _detectedLangName == 'Auto' ? txMut : txPri,
+                                  color: _detectedLangName == 'Auto'
+                                      ? txMut
+                                      : txPri,
                                   fontSize: 13,
                                   fontWeight: FontWeight.w600)),
                           const SizedBox(width: 10),
-                          Icon(Icons.arrow_forward_rounded, color: txMut, size: 14),
+                          Icon(Icons.arrow_forward_rounded,
+                              color: txMut, size: 14),
                           const SizedBox(width: 10),
                           Text(nativeLangName,
                               style: const TextStyle(
@@ -970,17 +968,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           const Spacer(),
                           GestureDetector(
                             onTap: () async {
-                              await Navigator.push(context,
-                                  MaterialPageRoute(builder: (_) => const LanguagesScreen()));
+                              await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                      builder: (_) =>
+                                      const LanguagesScreen()));
                               await TranslationService.instance.loadModels();
                               setState(() {});
                             },
                             child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 4),
                               decoration: BoxDecoration(
                                   color: _accent.withOpacity(0.1),
                                   borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: _accent.withOpacity(0.25))),
+                                  border: Border.all(
+                                      color: _accent.withOpacity(0.25))),
                               child: Text('Manage',
                                   style: TextStyle(
                                       color: _accent,
@@ -994,14 +997,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   ),
                   const SizedBox(height: 10),
 
-                  // ── ORB + WAVE (compact row) ─────────────────────────────
+                  // ── ORB + WAVE ────────────────────────────────────────────
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 20),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        // Wave bars — left side
                         Expanded(
                           child: SizedBox(
                             height: 36,
@@ -1012,125 +1014,142 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                 18,
                                     (i) => Flexible(
                                   child: AnimatedContainer(
-                                      duration: const Duration(milliseconds: 110),
-                                      margin: const EdgeInsets.symmetric(horizontal: 1.5),
+                                      duration:
+                                      const Duration(milliseconds: 110),
+                                      margin: const EdgeInsets.symmetric(
+                                          horizontal: 1.5),
                                       width: 2.5,
                                       height: isTranslating
                                           ? _waveHeights[i].clamp(4.0, 28.0)
                                           : 4.0,
                                       decoration: BoxDecoration(
                                           color: isTranslating
-                                              ? _accent.withOpacity(0.3 + (i % 4) * 0.15)
+                                              ? _accent.withOpacity(
+                                              0.3 + (i % 4) * 0.15)
                                               : bdr,
-                                          borderRadius: BorderRadius.circular(2))),
+                                          borderRadius:
+                                          BorderRadius.circular(2))),
                                 ),
                               ),
                             ),
                           ),
                         ),
-
                         const SizedBox(width: 16),
-
-                        // ORB — smaller
                         AnimatedBuilder(
                           animation: _pulseAnimation,
                           builder: (_, __) => Transform.scale(
-                            scale: isTranslating ? _pulseAnimation.value : 1.0,
+                            scale:
+                            isTranslating ? _pulseAnimation.value : 1.0,
                             child: GestureDetector(
                               onTap: _toggleTranslation,
-                              child: Stack(alignment: Alignment.center, children: [
-                                if (isTranslating)
-                                  AnimatedBuilder(
-                                    animation: _glowAnimation,
-                                    builder: (_, __) => Container(
-                                      width: 110, height: 110,
+                              child: Stack(
+                                  alignment: Alignment.center,
+                                  children: [
+                                    if (isTranslating)
+                                      AnimatedBuilder(
+                                        animation: _glowAnimation,
+                                        builder: (_, __) => Container(
+                                          width: 110,
+                                          height: 110,
+                                          decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              border: Border.all(
+                                                  color: _accent.withOpacity(
+                                                      (_isDark ? 0.25 : 0.15) *
+                                                          _glowAnimation
+                                                              .value),
+                                                  width: 1)),
+                                        ),
+                                      ),
+                                    Container(
+                                        width: 96,
+                                        height: 96,
+                                        decoration: BoxDecoration(
+                                            shape: BoxShape.circle,
+                                            border: Border.all(
+                                                color: isTranslating
+                                                    ? _accent.withOpacity(0.4)
+                                                    : bdr,
+                                                width: 1.5))),
+                                    Container(
+                                      width: 80,
+                                      height: 80,
                                       decoration: BoxDecoration(
-                                          shape: BoxShape.circle,
-                                          border: Border.all(
-                                              color: _accent.withOpacity(
-                                                  (_isDark ? 0.25 : 0.15) *
-                                                      _glowAnimation.value),
-                                              width: 1)),
-                                    ),
-                                  ),
-                                Container(
-                                    width: 96, height: 96,
-                                    decoration: BoxDecoration(
                                         shape: BoxShape.circle,
-                                        border: Border.all(
-                                            color: isTranslating
-                                                ? _accent.withOpacity(0.4)
-                                                : bdr,
-                                            width: 1.5))),
-                                Container(
-                                  width: 80, height: 80,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    gradient: RadialGradient(
-                                        colors: isTranslating
+                                        gradient: RadialGradient(
+                                            colors: isTranslating
+                                                ? [
+                                              const Color(0xFF12B589),
+                                              const Color(0xFF0E9A72),
+                                              const Color(0xFF0B7D5C),
+                                            ]
+                                                : _isDark
+                                                ? [
+                                              const Color(
+                                                  0xFF1A1A2A),
+                                              const Color(
+                                                  0xFF111120),
+                                              const Color(
+                                                  0xFF0A0A15),
+                                            ]
+                                                : [
+                                              const Color(
+                                                  0xFFF2F2F2),
+                                              const Color(
+                                                  0xFFE8E8E8),
+                                              const Color(
+                                                  0xFFDDDDDD),
+                                            ]),
+                                        boxShadow: isTranslating
                                             ? [
-                                          const Color(0xFF12B589),
-                                          const Color(0xFF0E9A72),
-                                          const Color(0xFF0B7D5C),
-                                        ]
-                                            : _isDark
-                                            ? [
-                                          const Color(0xFF1A1A2A),
-                                          const Color(0xFF111120),
-                                          const Color(0xFF0A0A15),
+                                          BoxShadow(
+                                              color: _accent
+                                                  .withOpacity(0.5),
+                                              blurRadius: 24,
+                                              spreadRadius: 2)
                                         ]
                                             : [
-                                          const Color(0xFFF2F2F2),
-                                          const Color(0xFFE8E8E8),
-                                          const Color(0xFFDDDDDD),
-                                        ]),
-                                    boxShadow: isTranslating
-                                        ? [
-                                      BoxShadow(
-                                          color: _accent.withOpacity(0.5),
-                                          blurRadius: 24,
-                                          spreadRadius: 2)
-                                    ]
-                                        : [
-                                      BoxShadow(
-                                          color: Colors.black.withOpacity(
-                                              _isDark ? 0.5 : 0.1),
-                                          blurRadius: 12)
-                                    ],
-                                  ),
-                                  child: Column(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: [
-                                        Icon(
-                                            isTranslating
-                                                ? Icons.mic_rounded
-                                                : Icons.mic_none_rounded,
-                                            size: 28,
-                                            color: isTranslating
-                                                ? Colors.white
-                                                : txMut),
-                                        const SizedBox(height: 3),
-                                        Text(
-                                            isTranslating
-                                                ? 'STOP'
-                                                : 'START',
-                                            style: TextStyle(
+                                          BoxShadow(
+                                              color: Colors.black
+                                                  .withOpacity(_isDark
+                                                  ? 0.5
+                                                  : 0.1),
+                                              blurRadius: 12)
+                                        ],
+                                      ),
+                                      child: Column(
+                                          mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                          children: [
+                                            Icon(
+                                                isTranslating
+                                                    ? Icons.mic_rounded
+                                                    : Icons.mic_none_rounded,
+                                                size: 28,
                                                 color: isTranslating
-                                                    ? Colors.white.withOpacity(0.9)
-                                                    : txMut,
-                                                fontSize: 9,
-                                                fontWeight: FontWeight.w700,
-                                                letterSpacing: 1.2)),
-                                      ]),
-                                ),
-                              ]),
+                                                    ? Colors.white
+                                                    : txMut),
+                                            const SizedBox(height: 3),
+                                            Text(
+                                                isTranslating
+                                                    ? 'STOP'
+                                                    : 'START',
+                                                style: TextStyle(
+                                                    color: isTranslating
+                                                        ? Colors.white
+                                                        .withOpacity(0.9)
+                                                        : txMut,
+                                                    fontSize: 9,
+                                                    fontWeight:
+                                                    FontWeight.w700,
+                                                    letterSpacing: 1.2)),
+                                          ]),
+                                    ),
+                                  ]),
                             ),
                           ),
                         ),
-
                         const SizedBox(width: 16),
-
-                        // Wave bars — right side
                         Expanded(
                           child: SizedBox(
                             height: 36,
@@ -1141,17 +1160,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                 18,
                                     (i) => Flexible(
                                   child: AnimatedContainer(
-                                      duration: const Duration(milliseconds: 110),
-                                      margin: const EdgeInsets.symmetric(horizontal: 1.5),
+                                      duration:
+                                      const Duration(milliseconds: 110),
+                                      margin: const EdgeInsets.symmetric(
+                                          horizontal: 1.5),
                                       width: 2.5,
                                       height: isTranslating
-                                          ? _waveHeights[18 + i].clamp(4.0, 28.0)
+                                          ? _waveHeights[18 + i]
+                                          .clamp(4.0, 28.0)
                                           : 4.0,
                                       decoration: BoxDecoration(
                                           color: isTranslating
-                                              ? _accent.withOpacity(0.3 + (i % 4) * 0.15)
+                                              ? _accent.withOpacity(
+                                              0.3 + (i % 4) * 0.15)
                                               : bdr,
-                                          borderRadius: BorderRadius.circular(2))),
+                                          borderRadius:
+                                          BorderRadius.circular(2))),
                                 ),
                               ),
                             ),
@@ -1161,7 +1185,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     ),
                   ),
 
-                  // ── STATUS ───────────────────────────────────────────────
+                  // ── STATUS ────────────────────────────────────────────────
                   const SizedBox(height: 6),
                   AnimatedSwitcher(
                     duration: const Duration(milliseconds: 350),
@@ -1174,7 +1198,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   ),
                   const SizedBox(height: 8),
 
-                  // ── TEXT CARD ────────────────────────────────────────────
+                  // ── TEXT CARD ─────────────────────────────────────────────
                   Expanded(
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -1200,7 +1224,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                   children: [
                                     Row(children: [
                                       Container(
-                                          width: 6, height: 6,
+                                          width: 6,
+                                          height: 6,
                                           decoration: BoxDecoration(
                                               shape: BoxShape.circle,
                                               color: originalText.isNotEmpty
@@ -1236,7 +1261,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             ),
                           ),
 
-                          // Green gradient divider
                           Container(
                               height: 1,
                               margin:
@@ -1258,7 +1282,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                   children: [
                                     Row(children: [
                                       Container(
-                                          width: 6, height: 6,
+                                          width: 6,
+                                          height: 6,
                                           decoration: BoxDecoration(
                                               shape: BoxShape.circle,
                                               color: translatedText.isNotEmpty
@@ -1308,7 +1333,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                                   : '')
                                                   : translatedText,
                                               style: TextStyle(
-                                                  color: translatedText.isEmpty
+                                                  color:
+                                                  translatedText.isEmpty
                                                       ? txDead
                                                       : txPri,
                                                   fontSize: 19,
@@ -1327,12 +1353,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   ),
                   const SizedBox(height: 10),
 
-                  // ── BOTTOM NAV ───────────────────────────────────────────
+                  // ── BOTTOM NAV ────────────────────────────────────────────
                   AnimatedContainer(
                     duration: const Duration(milliseconds: 300),
                     margin: const EdgeInsets.fromLTRB(20, 0, 20, 14),
-                    padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 6, vertical: 6),
                     decoration: BoxDecoration(
                         color: card,
                         borderRadius: BorderRadius.circular(20),
@@ -1378,7 +1404,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             boxShadow: _t.barShadow),
         child: Row(children: [
           Container(
-              width: 32, height: 32,
+              width: 32,
+              height: 32,
               decoration: BoxDecoration(
                   color: _accent.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(9)),
@@ -1402,7 +1429,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             fontWeight: FontWeight.w600)),
                   ])),
           Container(
-              width: 7, height: 7,
+              width: 7,
+              height: 7,
               decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: isTranslating ? _accent : txDead)),
@@ -1418,7 +1446,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Widget _topBtn(IconData icon, VoidCallback onTap) => GestureDetector(
       onTap: onTap,
       child: Container(
-          width: 36, height: 36,
+          width: 36,
+          height: 36,
           decoration: BoxDecoration(
               color: bar,
               borderRadius: BorderRadius.circular(10),
@@ -1445,7 +1474,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 8),
         decoration: BoxDecoration(
-            color: isActive ? _accent.withOpacity(0.12) : Colors.transparent,
+            color:
+            isActive ? _accent.withOpacity(0.12) : Colors.transparent,
             borderRadius: BorderRadius.circular(13)),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Icon(icon, color: isActive ? _accent : txDd2, size: 21),
